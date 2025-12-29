@@ -126,3 +126,56 @@ exports.getTopProducts = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+// CATEGORY WISE SALES PIE CHART
+exports.getCategorySales = async (req, res) => {
+  try {
+    const sellerId = req.user._id;
+
+    const results = await Order.aggregate([
+      { $unwind: "$items" },
+
+      {
+        $lookup: {
+          from: "products",
+          localField: "items.product",
+          foreignField: "_id",
+          as: "product"
+        }
+      },
+      { $unwind: "$product" },
+
+      { $match: { "product.sellerId": new mongoose.Types.ObjectId(sellerId) } },
+
+      {
+        $group: {
+          _id: "$product.category",
+          value: { $sum: "$items.quantity" } // or sum revenue if preferred
+        }
+      },
+      // Resolve Category Details
+      {
+        $lookup: {
+          from: "categories",
+          localField: "_id",
+          foreignField: "_id",
+          as: "catDetails"
+        }
+      },
+      { $unwind: { path: "$catDetails", preserveNullAndEmptyArrays: true } },
+
+      {
+        $project: {
+          name: { $ifNull: ["$catDetails.title", "Unknown"] },
+          value: 1
+        }
+      }
+    ]);
+
+    // Format results
+    res.json(results);
+  } catch (err) {
+    console.error("Category sales error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};

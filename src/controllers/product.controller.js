@@ -250,6 +250,67 @@ const listProducts = async (req, res) => {
   }
 };
 
+const Review = require("../models/Review");
+
+/* ---------------- ADD REVIEW ---------------- */
+const addProductReview = async (req, res) => {
+  try {
+    const { rating, comment } = req.body;
+    const productId = req.params.id;
+    const userId = req.user._id;
+
+    const product = await Product.findById(productId);
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
+    }
+
+    const alreadyReviewed = await Review.findOne({
+      productId,
+      userId,
+    });
+
+    if (alreadyReviewed) {
+      return res.status(400).json({ message: "Product already reviewed" });
+    }
+
+    const review = await Review.create({
+      productId,
+      userId,
+      rating: Number(rating),
+      comment,
+    });
+
+    // Update product stats
+    const reviews = await Review.find({ productId });
+    const numReviews = reviews.length;
+    const avgRating =
+      reviews.reduce((acc, item) => item.rating + acc, 0) / reviews.length;
+
+    product.rating = avgRating;
+    product.numReviews = numReviews;
+    await product.save();
+
+    res.status(201).json({ message: "Review added", review });
+  } catch (err) {
+    console.error("addProductReview error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
+/* ---------------- GET REVIEWS ---------------- */
+const getProductReviews = async (req, res) => {
+  try {
+    const reviews = await Review.find({ productId: req.params.id })
+      .populate("userId", "fullName")
+      .sort({ createdAt: -1 });
+
+    res.json(reviews);
+  } catch (err) {
+    console.error("getProductReviews error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};
+
 module.exports = {
   createProduct,
   uploadImages,
@@ -257,5 +318,7 @@ module.exports = {
   deleteProduct,
   getProduct,
   listProducts,
+  addProductReview,
+  getProductReviews,
 };
 

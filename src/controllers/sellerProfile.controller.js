@@ -59,3 +59,16 @@ exports.getPublicSellerProfile = async (req, res) => {
     res.status(500).json({ message: "Server error" });
   }
 };
+
+exports.getAllSellers = async (req, res) => {
+  try {
+    const sellers = await User.find({ role: "seller" })
+      .select("shopName ownerName _id address")
+      .limit(10); // Limit to popular/recent 10 for now
+
+    res.json(sellers);
+  } catch (err) {
+    console.error("getAllSellers error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+};

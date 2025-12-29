@@ -29,13 +29,17 @@ const orderSchema = new mongoose.Schema(
     },
     address: {
       fullAddress: String,
+      mobile: String,
+      city: String,
+      state: String,
+      pincode: Number,
       lat: Number,
       lng: Number,
     },
 
     orderStatus: {
       type: String,
-      enum: ["PLACED", "CONFIRMED", "SHIPPED", "DELIVERED", "CANCELLED"],
+      enum: ["PLACED", "PENDING", "CONFIRMED", "SHIPPED", "DELIVERED", "CANCELLED"],
       default: "PLACED",
     },
     paymentMode: { type: String, enum: ["COD", "ONLINE"], default: "COD" },

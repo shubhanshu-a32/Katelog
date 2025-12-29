@@ -1,5 +1,7 @@
 const Order = require("../models/Order");
 const Product = require("../models/Product");
+const { paginate } = require("../utils/pagination");
+const { generateInvoice } = require('../utils/invoice');
 
 /* ---------------- CREATE ORDER ---------------- */
 const createOrder = async (req, res) => {
@@ -75,6 +77,18 @@ const createOrder = async (req, res) => {
   }
 };
 
+/* ------------------ DOWNLOAD INVOICE ----------------------*/
+
+const downloadInvoice = async (req, res) => {
+  const order = await Order.findById(req.params.id)
+    .populate("items.product")
+    .populate("sellerId", "shopName address mobile email ownerName lat lng");
+
+  if (!order) return res.status(404).json({ message: "Order not found" });
+
+  generateInvoice(order, res);
+}
+
 /* ---------------- LIST ORDERS ---------------- */
 const listOrdersByUser = async (req, res) => {
   try {
@@ -86,15 +100,17 @@ const listOrdersByUser = async (req, res) => {
         ? { buyer: user._id }
         : { "items.product": { $exists: true } };
 
-    const orders = await Order.find(filter)
+    const query = Order.find(filter)
       .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(Number(limit))
-      .limit(Number(limit))
       .populate("items.product")
       .populate("buyer", "fullName mobile email addresses");
 
-    res.json({ data: orders });
+    const result = await paginate(query, {
+      page: Number(page),
+      limit: Number(limit),
+    });
+
+    res.json(result);
   } catch (err) {
     console.error("listOrders error:", err);
     res.status(500).json({ message: "Server error" });
@@ -137,4 +153,5 @@ module.exports = {
   createOrder,
   listOrdersByUser,
   updateOrderStatus,
+  downloadInvoice,
 };

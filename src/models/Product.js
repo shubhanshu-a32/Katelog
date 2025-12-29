@@ -26,6 +26,8 @@ const productSchema = new mongoose.Schema(
       enum: ["ACTIVE", "OUT_OF_STOCK", "DISABLED"],
     },
     images: [{ type: String }],
+    rating: { type: Number, default: 0 },
+    numReviews: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now },
     sellerName: String,
   },
