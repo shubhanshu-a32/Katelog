@@ -4,6 +4,7 @@ const User = require("../models/User");
 const Product = require("../models/Product");
 const { sendWhatsappMessage } = require("../services/whatsapp.service");
 const DeliveryPartner = require("../models/DeliveryPartner");
+const SellerAnalytics = require("../models/SellerAnalytics");
 
 const getStats = async (req, res) => {
   const totalOrders = await Order.countDocuments();
@@ -762,9 +763,145 @@ const deleteOrder = async (req, res) => {
   }
 };
 
+
+const getAllAnalytics = async (req, res) => {
+  try {
+    const { filter, date } = req.query;
+    let query = {};
+
+    if (filter && filter !== 'all_time' && date) {
+      // Create a date object relative to the client's day provided (ensure YYYY-MM-DD format works)
+      // If date is "2026-01-08", new Date("2026-01-08") is UTC 00:00.
+      // If we simply rely on that for filtering against createdAt (which is UTC), it should work IF query logic is correct.
+      // However, to be extra safe and inclusive of the entire "local" day as intended by the user:
+
+      const selectedDate = new Date(date);
+      let startDate, endDate;
+
+      if (filter === 'date') {
+        // Range: 00:00:00.000 to 23:59:59.999 of the specific date
+        // Use the string components to avoid timezone shifts if possible, or reset hours safely.
+        startDate = new Date(selectedDate);
+        startDate.setHours(0, 0, 0, 0);
+
+        endDate = new Date(selectedDate);
+        endDate.setHours(23, 59, 59, 999);
+
+      } else if (filter === 'week') {
+        // Week (Sunday to Saturday)
+        // If today is Thursday (8th), and we want "This Week", it should be Sun 4th to Sat 10th.
+        const currentDay = selectedDate.getDay(); // 0-6
+
+        startDate = new Date(selectedDate);
+        startDate.setDate(selectedDate.getDate() - currentDay);
+        startDate.setHours(0, 0, 0, 0);
+
+        endDate = new Date(startDate);
+        endDate.setDate(startDate.getDate() + 6);
+        endDate.setHours(23, 59, 59, 999);
+
+      } else if (filter === 'month') {
+        // Full Month
+        startDate = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+        startDate.setHours(0, 0, 0, 0);
+
+        endDate = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0);
+        endDate.setHours(23, 59, 59, 999);
+      }
+
+      console.log(`[Analytics Filter] Type: ${filter}, Date: ${date}`);
+      console.log(`[Analytics Filter] Range: ${startDate.toISOString()} - ${endDate.toISOString()}`);
+
+      if (startDate && endDate) {
+        query.createdAt = { $gte: startDate, $lte: endDate };
+      }
+    }
+
+    const analytics = await SellerAnalytics.find(query)
+      .select("orderId platformCommission totalCommissionPercentage sellerEarning deliveryPartnerFee platformCommissionStatus deliveryPartnerFeeStatus sellerId createdAt")
+      .populate({
+        path: "orderId",
+        populate: {
+          path: "items.product",
+          select: "title price images"
+        }
+      })
+      .populate("sellerId", "ownerName shopName mobile")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const analyticsWithTotal = analytics.map(record => ({
+      ...record,
+      totalCommission: (record.platformCommission || 0) + (record.deliveryPartnerFee || 0)
+    }));
+
+    res.json(analyticsWithTotal);
+  } catch (err) {
+    console.error("getAllAnalytics error:", err);
+    res.status(500).json({ message: "Failed to fetch analytics" });
+  }
+};
+
+const deleteAnalytics = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const deleted = await SellerAnalytics.findByIdAndDelete(id);
+    if (!deleted) return res.status(404).json({ message: "Analytics record not found" });
+
+    res.json({ message: "Analytics record deleted" });
+  } catch (err) {
+    console.error("deleteAnalytics error:", err);
+    res.status(500).json({ message: "Failed to delete analytics record" });
+  }
+};
+
+const updateAnalytics = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { platformCommissionStatus, deliveryPartnerFeeStatus } = req.body;
+
+    console.log(`[UpdateAnalytics] ID: ${id}, Body:`, req.body);
+
+    const analytics = await SellerAnalytics.findById(id);
+    if (!analytics) {
+      return res.status(404).json({ message: "Analytics record not found" });
+    }
+
+    if (platformCommissionStatus !== undefined) {
+      // Handle boolean or string
+      if (platformCommissionStatus === true || platformCommissionStatus === "true") {
+        analytics.platformCommissionStatus = "COMPLETED";
+      } else if (platformCommissionStatus === false || platformCommissionStatus === "false") {
+        analytics.platformCommissionStatus = "PENDING";
+      } else {
+        analytics.platformCommissionStatus = platformCommissionStatus.toUpperCase();
+      }
+    }
+
+    if (deliveryPartnerFeeStatus !== undefined) {
+      // Handle boolean or string
+      if (deliveryPartnerFeeStatus === true || deliveryPartnerFeeStatus === "true") {
+        analytics.deliveryPartnerFeeStatus = "COMPLETED";
+      } else if (deliveryPartnerFeeStatus === false || deliveryPartnerFeeStatus === "false") {
+        analytics.deliveryPartnerFeeStatus = "PENDING";
+      } else {
+        analytics.deliveryPartnerFeeStatus = deliveryPartnerFeeStatus.toUpperCase();
+      }
+    }
+
+    await analytics.save();
+
+    res.json({ message: "Analytics updated successfully", analytics });
+  } catch (err) {
+    console.error("updateAnalytics error:", err);
+    res.status(500).json({ message: "Failed to update analytics record", error: err.message });
+  }
+};
+
 module.exports = {
   getStats,
   getAllUsers,
+  createUser,
   getUserById,
   getUserOrders,
   deleteUser,
@@ -772,19 +909,20 @@ module.exports = {
   getSellerById,
   getSellerOrders,
   deleteSeller,
-  createUser,
-  addCategory,
-  addSubCategory,
-  deleteCategory,
-  deleteCategory,
-  deleteSubCategory,
   getAllOrders,
-  createDeliveryPartner,
-  getAllDeliveryPartners,
-  updateDeliveryPartner,
   assignOrderToPartner,
   updateOrderStatus,
   updateOrder,
+  deleteOrder,
+  createDeliveryPartner,
+  getAllDeliveryPartners,
+  updateDeliveryPartner,
   deleteDeliveryPartner,
-  deleteOrder
+  addCategory,
+  addSubCategory,
+  deleteCategory,
+  deleteSubCategory,
+  getAllAnalytics,
+  deleteAnalytics,
+  updateAnalytics
 };

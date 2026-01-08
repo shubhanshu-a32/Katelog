@@ -1,5 +1,6 @@
 const Order = require("../models/Order");
 const Product = require("../models/Product");
+const SellerAnalytics = require("../models/SellerAnalytics");
 const { paginate } = require("../utils/pagination");
 const { generateInvoice } = require('../utils/invoice');
 
@@ -35,6 +36,7 @@ const createOrder = async (req, res) => {
     }
 
     let totalAmount = 0;
+    let platformCommission = 0;
     let seller = null;
 
     const orderItems = [];
@@ -64,10 +66,14 @@ const createOrder = async (req, res) => {
 
       totalAmount += product.price * qty;
 
+      const commissionPercent = product.commission || 0;
+      platformCommission += (product.price * qty * commissionPercent) / 100;
+
       orderItems.push({
         product: product._id,
         quantity: qty,
         price: product.price,
+        commission: commissionPercent
       });
     }
 
@@ -87,11 +93,30 @@ const createOrder = async (req, res) => {
     });
 
     // Reduce stock AFTER order success
+    // Calculate Total Commission Percentage (Sum of all item commissions)
+    let totalCommissionPercentage = 0;
     for (const it of orderItems) {
       await Product.findByIdAndUpdate(it.product, {
         $inc: { stock: -it.quantity },
       });
+      totalCommissionPercentage += (it.commission || 0);
     }
+
+    // Calculate Earnings
+    const deliveryPartnerFee = shippingCharge * 0.8;
+    // sellerEarning = Total Order Amount (Inc. Shipping) - Commission - Shipping Charge
+    // This effectively results in (Product Price - Commission) but follows the user's requested formula structure.
+    const sellerEarning = finalTotal - platformCommission - shippingCharge;
+
+    await SellerAnalytics.create({
+      orderId: order._id,
+      platformCommission,
+      totalCommissionPercentage,
+      sellerEarning,
+      deliveryPartnerFee,
+      sellerId: seller,
+    });
+
 
     res.status(201).json(order);
   } catch (err) {

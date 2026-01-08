@@ -16,6 +16,14 @@ const sendOtp = async (req, res) => {
   if (!mobile || !role) return res.status(400).json({ message: 'Mobile and role required' });
   if (!['buyer', 'seller'].includes(role)) return res.status(400).json({ message: 'Invalid role' });
 
+  // Check if mobile is already registered with a different role
+  const existingUser = await User.findOne({ mobile });
+  if (existingUser && existingUser.role !== role) {
+    return res.status(400).json({
+      message: `This mobile number is already registered. Please use a different number.`
+    });
+  }
+
   const otp = generateNumericOtp(6);
   try {
     await setOtp(mobile, otp);

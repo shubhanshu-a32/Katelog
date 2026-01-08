@@ -12,6 +12,12 @@ const productSchema = new mongoose.Schema(
     price: { type: Number, required: true },
     stock: { type: Number, default: 0 },
     variant: { type: String, trim: true },
+    commission: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: 100
+    },
     category: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Category",

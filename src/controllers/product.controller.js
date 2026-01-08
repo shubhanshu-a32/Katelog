@@ -20,6 +20,7 @@ const createProduct = async (req, res) => {
       price,
       stock = 0,
       variant,
+      commission = 0,
       category,
       subcategory,
       images = [],
@@ -31,6 +32,10 @@ const createProduct = async (req, res) => {
 
     if (Number(price) < 0 || Number(stock) < 0) {
       return res.status(400).json({ message: "Invalid price or stock" });
+    }
+
+    if (Number(commission) < 0 || Number(commission) > 100) {
+      return res.status(400).json({ message: "Commission must be between 0 and 100" });
     }
 
     // Resolve category/subcategory slugs to ObjectIds when the frontend sends strings like "electronics", "mobiles"
@@ -81,7 +86,10 @@ const createProduct = async (req, res) => {
       description,
       price: Number(price),
       stock: Number(stock),
+      price: Number(price),
+      stock: Number(stock),
       variant,
+      commission: Number(commission),
       category: categoryId,
       subcategory: subcategoryId,
       images,

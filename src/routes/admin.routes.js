@@ -41,5 +41,8 @@ router.post("/categories/sub", adminAuth, adminCtrl.addSubCategory); // Compatib
 
 // ANALYTICS
 router.get("/stats", adminAuth, adminCtrl.getStats);
+router.get("/analytics", adminAuth, adminCtrl.getAllAnalytics);
+router.put("/analytics/:id", adminAuth, adminCtrl.updateAnalytics);
+router.delete("/analytics/:id", adminAuth, adminCtrl.deleteAnalytics);
 
 module.exports = router;
