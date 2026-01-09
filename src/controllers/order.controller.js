@@ -24,6 +24,7 @@ const calcShipping = (itemCount, total) => {
 };
 
 /* ---------------- CREATE ORDER ---------------- */
+/* ---------------- CREATE ORDER ---------------- */
 const createOrder = async (req, res) => {
   try {
     const buyer = req.user._id;
@@ -35,11 +36,8 @@ const createOrder = async (req, res) => {
       return res.status(400).json({ message: "Items required" });
     }
 
-    let totalAmount = 0;
-    let platformCommission = 0;
-    let seller = null;
-
-    const orderItems = [];
+    // 1. Group items by Seller
+    const sellerGroups = {};
 
     for (const it of items) {
       const prodId = it.product || it.productId;
@@ -57,68 +55,78 @@ const createOrder = async (req, res) => {
         });
       }
 
-      if (!seller) seller = product.sellerId;
-      if (seller.toString() !== product.sellerId.toString()) {
-        return res
-          .status(400)
-          .json({ message: "Multiple sellers in one order not allowed" });
+      const sellerIdStr = product.sellerId.toString();
+      if (!sellerGroups[sellerIdStr]) {
+        sellerGroups[sellerIdStr] = {
+          sellerId: product.sellerId,
+          items: [],
+          totalAmount: 0,
+          platformCommission: 0,
+        };
       }
 
-      totalAmount += product.price * qty;
-
       const commissionPercent = product.commission || 0;
-      platformCommission += (product.price * qty * commissionPercent) / 100;
+      const amount = product.price * qty;
+      const commission = (amount * commissionPercent) / 100;
 
-      orderItems.push({
+      sellerGroups[sellerIdStr].items.push({
         product: product._id,
         quantity: qty,
         price: product.price,
-        commission: commissionPercent
+        commission: commissionPercent,
       });
+
+      sellerGroups[sellerIdStr].totalAmount += amount;
+      sellerGroups[sellerIdStr].platformCommission += commission;
     }
 
-    const shippingCharge = calcShipping(orderItems.length, totalAmount);
-    const finalTotal = totalAmount + shippingCharge;
+    const createdOrders = [];
 
-    const order = await Order.create({
-      buyer,
-      sellerId: seller,
-      items: orderItems,
-      totalAmount: finalTotal,
-      shippingCharge,
-      paymentMode,
-      paymentStatus: paymentMode === "COD" ? "PENDING" : "PAID",
-      orderStatus: "PLACED",
-      address,
-    });
+    // 2. Create Order for each seller
+    for (const sellerId in sellerGroups) {
+      const group = sellerGroups[sellerId];
 
-    // Reduce stock AFTER order success
-    // Calculate Total Commission Percentage (Sum of all item commissions)
-    let totalCommissionPercentage = 0;
-    for (const it of orderItems) {
-      await Product.findByIdAndUpdate(it.product, {
-        $inc: { stock: -it.quantity },
+      const shippingCharge = calcShipping(group.items.length, group.totalAmount);
+      const finalTotal = group.totalAmount + shippingCharge;
+
+      const order = await Order.create({
+        buyer,
+        sellerId: group.sellerId,
+        items: group.items,
+        totalAmount: finalTotal,
+        shippingCharge,
+        paymentMode,
+        paymentStatus: paymentMode === "COD" ? "PENDING" : "PAID",
+        orderStatus: "PLACED",
+        address,
       });
-      totalCommissionPercentage += (it.commission || 0);
+
+      // Reduce stock AFTER order success
+      let totalCommissionPercentage = 0;
+      for (const it of group.items) {
+        await Product.findByIdAndUpdate(it.product, {
+          $inc: { stock: -it.quantity },
+        });
+        totalCommissionPercentage += (it.commission || 0);
+      }
+
+      // Calculate Earnings
+      const deliveryPartnerFee = shippingCharge * 0.8;
+      const sellerEarning = finalTotal - group.platformCommission - shippingCharge;
+
+      await SellerAnalytics.create({
+        orderId: order._id,
+        platformCommission: group.platformCommission,
+        totalCommissionPercentage,
+        sellerEarning,
+        deliveryPartnerFee,
+        sellerId: group.sellerId,
+      });
+
+      createdOrders.push(order);
     }
 
-    // Calculate Earnings
-    const deliveryPartnerFee = shippingCharge * 0.8;
-    // sellerEarning = Total Order Amount (Inc. Shipping) - Commission - Shipping Charge
-    // This effectively results in (Product Price - Commission) but follows the user's requested formula structure.
-    const sellerEarning = finalTotal - platformCommission - shippingCharge;
-
-    await SellerAnalytics.create({
-      orderId: order._id,
-      platformCommission,
-      totalCommissionPercentage,
-      sellerEarning,
-      deliveryPartnerFee,
-      sellerId: seller,
-    });
-
-
-    res.status(201).json(order);
+    res.status(201).json(createdOrders);
   } catch (err) {
     console.error("createOrder error:", err);
     res.status(500).json({ message: "Server error" });

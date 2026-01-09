@@ -17,7 +17,7 @@ const generateInvoice = (order, res) => {
         .fontSize(20)
         .text("INVOICE", { align: "center" })
         .fontSize(10)
-        .text("B2C Marketplace", { align: "center" });
+        .text("Ketalog", { align: "center" });
 
     doc.moveDown();
 

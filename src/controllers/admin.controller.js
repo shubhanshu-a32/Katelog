@@ -5,6 +5,8 @@ const Product = require("../models/Product");
 const { sendWhatsappMessage } = require("../services/whatsapp.service");
 const DeliveryPartner = require("../models/DeliveryPartner");
 const SellerAnalytics = require("../models/SellerAnalytics");
+const PDFDocument = require("pdfkit");
+const xlsx = require("xlsx");
 
 const getStats = async (req, res) => {
   const totalOrders = await Order.countDocuments();
@@ -764,69 +766,56 @@ const deleteOrder = async (req, res) => {
 };
 
 
+/* --- Helper: Build Query --- */
+const _buildAnalyticsQuery = (filter, dateStr) => {
+  let query = {};
+  if (filter && filter !== "all_time" && dateStr) {
+    const selectedDate = new Date(dateStr);
+    let startDate, endDate;
+
+    if (filter === "date") {
+      startDate = new Date(selectedDate);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(selectedDate);
+      endDate.setHours(23, 59, 59, 999);
+    } else if (filter === "week") {
+      const currentDay = selectedDate.getDay();
+      startDate = new Date(selectedDate);
+      startDate.setDate(selectedDate.getDate() - currentDay);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(startDate);
+      endDate.setDate(startDate.getDate() + 6);
+      endDate.setHours(23, 59, 59, 999);
+    } else if (filter === "month") {
+      startDate = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+      endDate = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0);
+      endDate.setHours(23, 59, 59, 999);
+    } else if (filter === "year") {
+      startDate = new Date(selectedDate.getFullYear(), 0, 1);
+      endDate = new Date(selectedDate.getFullYear(), 11, 31);
+      endDate.setHours(23, 59, 59, 999);
+    }
+
+    if (startDate && endDate) {
+      query.createdAt = { $gte: startDate, $lte: endDate };
+    }
+  }
+  return query;
+};
+
 const getAllAnalytics = async (req, res) => {
   try {
     const { filter, date } = req.query;
-    let query = {};
-
-    if (filter && filter !== 'all_time' && date) {
-      // Create a date object relative to the client's day provided (ensure YYYY-MM-DD format works)
-      // If date is "2026-01-08", new Date("2026-01-08") is UTC 00:00.
-      // If we simply rely on that for filtering against createdAt (which is UTC), it should work IF query logic is correct.
-      // However, to be extra safe and inclusive of the entire "local" day as intended by the user:
-
-      const selectedDate = new Date(date);
-      let startDate, endDate;
-
-      if (filter === 'date') {
-        // Range: 00:00:00.000 to 23:59:59.999 of the specific date
-        // Use the string components to avoid timezone shifts if possible, or reset hours safely.
-        startDate = new Date(selectedDate);
-        startDate.setHours(0, 0, 0, 0);
-
-        endDate = new Date(selectedDate);
-        endDate.setHours(23, 59, 59, 999);
-
-      } else if (filter === 'week') {
-        // Week (Sunday to Saturday)
-        // If today is Thursday (8th), and we want "This Week", it should be Sun 4th to Sat 10th.
-        const currentDay = selectedDate.getDay(); // 0-6
-
-        startDate = new Date(selectedDate);
-        startDate.setDate(selectedDate.getDate() - currentDay);
-        startDate.setHours(0, 0, 0, 0);
-
-        endDate = new Date(startDate);
-        endDate.setDate(startDate.getDate() + 6);
-        endDate.setHours(23, 59, 59, 999);
-
-      } else if (filter === 'month') {
-        // Full Month
-        startDate = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
-        startDate.setHours(0, 0, 0, 0);
-
-        endDate = new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0);
-        endDate.setHours(23, 59, 59, 999);
-      }
-
-      console.log(`[Analytics Filter] Type: ${filter}, Date: ${date}`);
-      console.log(`[Analytics Filter] Range: ${startDate.toISOString()} - ${endDate.toISOString()}`);
-
-      if (startDate && endDate) {
-        query.createdAt = { $gte: startDate, $lte: endDate };
-      }
-    }
+    const query = _buildAnalyticsQuery(filter, date);
 
     const analytics = await SellerAnalytics.find(query)
       .select("orderId platformCommission totalCommissionPercentage sellerEarning deliveryPartnerFee platformCommissionStatus deliveryPartnerFeeStatus sellerId createdAt")
       .populate({
         path: "orderId",
-        populate: {
-          path: "items.product",
-          select: "title price images"
-        }
+        select: "_id totalAmount createdAt items shippingCharge", // Only need basic order info
+        populate: { path: "items.product", select: "title price" } // Keep minimal
       })
-      .populate("sellerId", "ownerName shopName mobile")
+      .populate("sellerId", "shopName ownerName mobile")
       .sort({ createdAt: -1 })
       .lean();
 
@@ -839,6 +828,158 @@ const getAllAnalytics = async (req, res) => {
   } catch (err) {
     console.error("getAllAnalytics error:", err);
     res.status(500).json({ message: "Failed to fetch analytics" });
+  }
+};
+
+const downloadAnalyticsExcel = async (req, res) => {
+  try {
+    const { filter, date } = req.query;
+    const query = _buildAnalyticsQuery(filter, date);
+
+    const analytics = await SellerAnalytics.find(query)
+      .populate("sellerId", "shopName ownerName mobile")
+      .populate({
+        path: "orderId",
+        select: "_id totalAmount createdAt items shippingCharge",
+        populate: { path: "items.product", select: "title" }
+      })
+      .sort({ createdAt: -1 });
+
+    const data = analytics.map(a => {
+      const seller = a.sellerId || {};
+      const order = a.orderId || {};
+
+      const orderDetails = order.items
+        ? order.items.map(item => item.product ? item.product.title : "Unknown").join(", ")
+        : "-";
+
+      const commStatus = a.platformCommissionStatus === "COMPLETED" ? "Paid" : "Pending";
+      const delStatus = a.deliveryPartnerFeeStatus === "COMPLETED" ? "Paid" : "Pending";
+
+      return {
+        "Order ID": order._id ? order._id.toString() : "-",
+        " ": "",
+        "Order Details": orderDetails,
+        "  ": "",
+        "Seller": seller.shopName || "Unknown",
+        "   ": "",
+        "Total Value": order.totalAmount || 0,
+        "    ": "",
+        "Comm. %": a.totalCommissionPercentage || 0,
+        "     ": "",
+        "Comm. Amt": a.platformCommission || 0,
+        "      ": "",
+        "Seller Pay": a.sellerEarning || 0,
+        "       ": "",
+        "Delivery Chg": order.shippingCharge || 0,
+        "        ": "",
+        "Partner Pay": a.deliveryPartnerFee || 0,
+        "         ": "",
+        "Del. Comm.": delStatus
+      };
+    });
+
+    const wb = xlsx.utils.book_new();
+    const ws = xlsx.utils.json_to_sheet(data);
+
+    // Adjusted widths to account for added spacer columns
+    const colWidths = Object.keys(data[0] || {}).map(key => ({ wch: key.trim() === "" ? 2 : key.length + 12 }));
+    ws['!cols'] = colWidths;
+
+    xlsx.utils.book_append_sheet(wb, ws, "Analytics");
+
+    const buf = xlsx.write(wb, { type: "buffer", bookType: "xlsx" });
+
+    res.setHeader("Content-Disposition", 'attachment; filename="analytics.xlsx"');
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.send(buf);
+
+  } catch (err) {
+    console.error("Download Excel Error:", err);
+    res.status(500).json({ message: "Failed to download Excel" });
+  }
+};
+
+const downloadAnalyticsPDF = async (req, res) => {
+  try {
+    const { filter, date } = req.query;
+    const query = _buildAnalyticsQuery(filter, date);
+
+    const analytics = await SellerAnalytics.find(query)
+      .populate("sellerId", "shopName ownerName")
+      .populate({
+        path: "orderId",
+        select: "_id totalAmount items shippingCharge",
+        populate: { path: "items.product", select: "title" }
+      })
+      .sort({ createdAt: -1 });
+
+    const doc = new PDFDocument({ margin: 15, size: 'A4', layout: 'landscape' });
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", 'attachment; filename="analytics.pdf"');
+    doc.pipe(res);
+
+    doc.fontSize(16).text("Seller Analytics Report", { align: "center" });
+    doc.fontSize(10).text(`Filter: ${filter || "All Time"} | Date: ${date || "-"}`, { align: "center" });
+    doc.moveDown();
+
+    const tableTop = doc.y;
+    // Widened X coordinates for gaps
+    const cols = [
+      { name: "Order ID", x: 10, w: 85 },
+      { name: "Order Details", x: 110, w: 120 },
+      { name: "Seller", x: 245, w: 80 },
+      { name: "Total Value", x: 340, w: 45 },
+      { name: "Comm.%", x: 400, w: 35 },
+      { name: "Comm.Amt", x: 450, w: 45 },
+      { name: "Seller Pay", x: 510, w: 45 },
+      { name: "Del.Chg", x: 570, w: 40 },
+      { name: "P.Pay", x: 625, w: 40 },
+      { name: "Del.Comm", x: 680, w: 80 }
+    ];
+
+    doc.font('Helvetica-Bold').fontSize(8);
+    cols.forEach(c => doc.text(c.name, c.x, tableTop, { width: c.w, align: 'left' }));
+    doc.moveTo(10, tableTop + 15).lineTo(830, tableTop + 15).stroke();
+
+    let y = tableTop + 25;
+    doc.font('Helvetica').fontSize(8);
+
+    analytics.forEach(a => {
+      const seller = a.sellerId || {};
+      const order = a.orderId || {};
+
+      const orderDetails = order.items
+        ? order.items.map(item => item.product ? item.product.title : "Unknown").join(", ")
+        : "-";
+
+      if (y > 520) {
+        doc.addPage({ layout: 'landscape', margin: 15 });
+        y = 30;
+      }
+
+      doc.text(order._id ? order._id.toString() : "-", cols[0].x, y, { width: cols[0].w, ellipsis: true });
+      doc.text(orderDetails, cols[1].x, y, { width: cols[1].w, ellipsis: true });
+      doc.text(seller.shopName || "-", cols[2].x, y, { width: cols[2].w, ellipsis: true });
+      doc.text(order.totalAmount || "0", cols[3].x, y);
+      doc.text(a.totalCommissionPercentage || "0", cols[4].x, y);
+      doc.text(a.platformCommission?.toFixed(1) || "0", cols[5].x, y);
+      doc.text(a.sellerEarning?.toFixed(1) || "0", cols[6].x, y);
+      doc.text(order.shippingCharge?.toFixed(1) || "0", cols[7].x, y); // Corrected
+      doc.text(a.deliveryPartnerFee?.toFixed(1) || "0", cols[8].x, y);
+
+      const status = a.deliveryPartnerFeeStatus === "COMPLETED" ? "Paid" : "Pending";
+      doc.text(status, cols[9].x, y);
+
+      y += 20;
+    });
+
+    doc.end();
+
+  } catch (err) {
+    console.error("Download PDF Error:", err);
+    res.status(500).json({ message: "Failed to download PDF" });
   }
 };
 
@@ -924,5 +1065,7 @@ module.exports = {
   deleteSubCategory,
   getAllAnalytics,
   deleteAnalytics,
+  downloadAnalyticsExcel,
+  downloadAnalyticsPDF,
   updateAnalytics
 };
