@@ -43,12 +43,12 @@ const clientBuildPath = path.join(__dirname, "..", "client", "dist");
 app.use(express.static(clientBuildPath));
 
 // Catch-all invalid API routes before serving frontend
-app.all('/api/*', (req, res) => {
+app.all(/^\/api\/.*/, (req, res) => {
   res.status(404).json({ message: 'API route not found' });
 });
 
 // SPA Fallback: Serve index.html for any non-API routes
-app.get("*", (req, res) => {
+app.get(/.*/, (req, res) => {
   res.sendFile(path.join(clientBuildPath, "index.html"));
 });
 
