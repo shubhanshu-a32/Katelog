@@ -38,6 +38,20 @@ app.use("/api/seller/analytics", require('./routes/sellerAnalytics.routes'));
 app.use("/api/location", require("./routes/location.routes"));
 app.use("/api/admin", require("./routes/admin.routes"));
 
+// Serve Frontend (Hostinger/VPS Deployment)
+const clientBuildPath = path.join(__dirname, "..", "client", "dist");
+app.use(express.static(clientBuildPath));
+
+// Catch-all invalid API routes before serving frontend
+app.all('/api/*', (req, res) => {
+  res.status(404).json({ message: 'API route not found' });
+});
+
+// SPA Fallback: Serve index.html for any non-API routes
+app.get("*", (req, res) => {
+  res.sendFile(path.join(clientBuildPath, "index.html"));
+});
+
 //Health
 app.get('/health', (_req, res) => res.json({ status: 'OK' }));
 
