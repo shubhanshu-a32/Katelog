@@ -11,7 +11,12 @@ const productSchema = new mongoose.Schema(
     description: { type: String },
     price: { type: Number, required: true },
     stock: { type: Number, default: 0 },
-    variant: { type: String, trim: true },
+    specs: {
+      size: { type: String, trim: true },
+      color: { type: String, trim: true },
+      weight: { type: Number },
+      weightUnit: { type: String, enum: ["kg", "g"], default: "kg" },
+    },
     commission: {
       type: Number,
       default: 0,

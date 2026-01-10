@@ -19,7 +19,7 @@ const createProduct = async (req, res) => {
       description,
       price,
       stock = 0,
-      variant,
+      specs = {},
       commission = 0,
       category,
       subcategory,
@@ -86,13 +86,16 @@ const createProduct = async (req, res) => {
       description,
       price: Number(price),
       stock: Number(stock),
-      price: Number(price),
-      stock: Number(stock),
-      variant,
       commission: Number(commission),
       category: categoryId,
       subcategory: subcategoryId,
       images,
+      specs: {
+        size: specs.size,
+        color: specs.color,
+        weight: specs.weight ? Number(specs.weight) : undefined,
+        weightUnit: specs.weightUnit || 'kg'
+      },
       sellerName: req.user.shopName || req.user.fullName,
     });
 
