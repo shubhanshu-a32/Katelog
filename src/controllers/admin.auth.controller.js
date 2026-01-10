@@ -5,6 +5,11 @@ const bcrypt = require('bcryptjs');
 exports.login = async (req, res) => {
     const { email, password } = req.body;
 
+    // STRICT: Only allow 'admin@katelog.in'
+    if (!email || email.toLowerCase() !== 'admin@ketalog.in') {
+        return res.status(403).json({ message: "Invalid credentials" });
+    }
+
     // Check if any admin exists
     const adminCount = await Admin.countDocuments();
     let admin;
@@ -48,7 +53,7 @@ exports.updateProfile = async (req, res) => {
     // Let's implement robust secure update.
 
     const { mobile, currentPassword, newPassword } = req.body;
-    const adminId = req.user.id; // From middleware
+    const adminId = req.admin.id; // From middleware matched key
 
     try {
         const admin = await Admin.findById(adminId);

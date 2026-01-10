@@ -10,6 +10,12 @@ const sellerProfileSchema = new mongoose.Schema({
     whatsappNumber: { type: String },
     pincode: { type: Number },
     area: { type: String },
+    bankDetails: {
+        accountName: { type: String },
+        accountNumber: { type: String },
+        bankName: { type: String },
+        ifscCode: { type: String }
+    },
     createdAt: { type: Date, default: Date.now }
 });
 

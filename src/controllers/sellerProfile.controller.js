@@ -18,7 +18,9 @@ exports.getSellerProfile = async (req, res) => {
     const responseData = {
       ...user.toObject(),
       pincode: sellerProfile?.pincode,
-      area: sellerProfile?.area
+      area: sellerProfile?.area,
+      gstNumber: sellerProfile?.gstNumber,
+      bankDetails: sellerProfile?.bankDetails
     };
 
     res.json(responseData);
@@ -30,7 +32,7 @@ exports.getSellerProfile = async (req, res) => {
 
 exports.updateSellerProfile = async (req, res) => {
   try {
-    const { shopName, ownerName, address, lat, lng, pincode, area } = req.body;
+    const { shopName, ownerName, address, lat, lng, pincode, area, gstNumber, bankDetails } = req.body;
 
     const user = await User.findById(req.user._id);
 
@@ -57,7 +59,9 @@ exports.updateSellerProfile = async (req, res) => {
         businessPhone: user.mobile,
         address: user.address,
         pincode: pincode ? Number(pincode) : undefined, // Ensure number
-        area: area
+        area: area,
+        gstNumber: gstNumber,
+        bankDetails: bankDetails
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
@@ -68,7 +72,9 @@ exports.updateSellerProfile = async (req, res) => {
     res.json({
       ...user.toObject(),
       pincode: updatedProfile?.pincode,
-      area: updatedProfile?.area
+      area: updatedProfile?.area,
+      gstNumber: updatedProfile?.gstNumber,
+      bankDetails: updatedProfile?.bankDetails
     });
   } catch (err) {
     console.error("updateSellerProfile error:", err);

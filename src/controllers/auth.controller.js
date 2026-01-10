@@ -6,8 +6,8 @@ const SellerProfile = require('../models/SellerProfile');
 const { generateNumericOtp } = require('../utils/otpGenerator');
 const { setOtp, getOtp, deleteOtp } = require('../utils/otpStore');
 
-const ACCESS_EXPIRES = process.env.ACCESS_TOKEN_EXPIRES_IN || '15m';
-const REFRESH_EXPIRES = process.env.REFRESH_TOKEN_EXPIRES_IN || '7d';
+const ACCESS_EXPIRES = process.env.ACCESS_TOKEN_EXPIRES_IN || '4h';
+const REFRESH_EXPIRES = process.env.REFRESH_TOKEN_EXPIRES_IN || '4h';
 const ACCESS_SECRET = process.env.ACCESS_TOKEN_SECRET || 'change_this_access_secret';
 const REFRESH_SECRET = process.env.REFRESH_TOKEN_SECRET || 'change_this_refresh_secret';
 
@@ -29,7 +29,7 @@ const sendOtp = async (req, res) => {
     await setOtp(mobile, otp);
     // TODO: integrate SMS provider (Twilio). For dev we print to console
     console.log(`OTP for ${mobile}: ${otp}`);
-    return res.json({ message: 'OTP sent (console for dev).', otpSentTo: mobile });
+    return res.json({ message: 'OTP sent (console for dev).', otpSentTo: mobile, otp });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: 'Could not send OTP' });
