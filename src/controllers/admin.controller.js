@@ -814,7 +814,8 @@ const deleteOrder = async (req, res) => {
 
 
 /* --- Helper: Build Query --- */
-const _buildAnalyticsQuery = (filter, dateStr) => {
+/* --- Helper: Build Query --- */
+const _buildAnalyticsQuery = async (filter, dateStr, search) => {
   let query = {};
   if (filter && filter !== "all_time" && dateStr) {
     const selectedDate = new Date(dateStr);
@@ -847,13 +848,31 @@ const _buildAnalyticsQuery = (filter, dateStr) => {
       query.createdAt = { $gte: startDate, $lte: endDate };
     }
   }
+
+  // --- Search Filter Logic ---
+  if (search) {
+    const searchRegex = new RegExp(search, "i");
+    const sellers = await User.find({
+      role: "seller",
+      $or: [
+        { shopName: searchRegex },
+        { ownerName: searchRegex },
+        { email: searchRegex },
+        { mobile: searchRegex }
+      ]
+    }).select("_id");
+
+    const sellerIds = sellers.map(s => s._id);
+    query.sellerId = { $in: sellerIds };
+  }
+
   return query;
 };
 
 const getAllAnalytics = async (req, res) => {
   try {
-    const { filter, date } = req.query;
-    const query = _buildAnalyticsQuery(filter, date);
+    const { filter, date, search } = req.query;
+    const query = await _buildAnalyticsQuery(filter, date, search);
 
     const analytics = await SellerAnalytics.find(query)
       .select("orderId platformCommission totalCommissionPercentage sellerEarning deliveryPartnerFee platformCommissionStatus deliveryPartnerFeeStatus sellerId createdAt")
@@ -880,8 +899,8 @@ const getAllAnalytics = async (req, res) => {
 
 const downloadAnalyticsExcel = async (req, res) => {
   try {
-    const { filter, date } = req.query;
-    const query = _buildAnalyticsQuery(filter, date);
+    const { filter, date, search } = req.query;
+    const query = await _buildAnalyticsQuery(filter, date, search);
 
     const analytics = await SellerAnalytics.find(query)
       .populate("sellerId", "shopName ownerName mobile")
@@ -949,8 +968,8 @@ const downloadAnalyticsExcel = async (req, res) => {
 
 const downloadAnalyticsPDF = async (req, res) => {
   try {
-    const { filter, date } = req.query;
-    const query = _buildAnalyticsQuery(filter, date);
+    const { filter, date, search } = req.query;
+    const query = await _buildAnalyticsQuery(filter, date, search);
 
     const analytics = await SellerAnalytics.find(query)
       .populate("sellerId", "shopName ownerName")
