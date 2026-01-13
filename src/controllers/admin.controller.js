@@ -132,7 +132,7 @@ const getUserById = async (req, res) => {
 const getSellerById = async (req, res) => {
   try {
     const { id } = req.params;
-    const user = await User.findById(id).select('-password');
+    const user = await User.findById(id).select('-password profilePicture');
     if (!user) return res.status(404).json({ message: "Seller not found" });
 
     const profile = await SellerProfile.findOne({ userId: id });
@@ -184,7 +184,10 @@ const getAllSellers = async (req, res) => {
             email: "$email",
             mobile: "$mobile",
             role: "$role",
-            createdAt: "$createdAt"
+            mobile: "$mobile",
+            role: "$role",
+            createdAt: "$createdAt",
+            profilePicture: "$profilePicture"
           },
           shopName: { $ifNull: ["$profile.shopName", "Unnamed Shop"] },
           createdAt: "$createdAt",
@@ -241,7 +244,7 @@ const getAllOrders = async (req, res) => {
     const orders = await Order.find(filter)
       .populate("buyer", "fullName mobile email")
       .populate("items.product", "title price images")
-      .populate("sellerId", "ownerName shopName")
+      .populate("sellerId", "ownerName shopName profilePicture")
       .sort({ createdAt: -1 });
 
     res.json(orders);

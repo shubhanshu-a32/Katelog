@@ -4,7 +4,7 @@ const SellerProfile = require("../models/SellerProfile");
 exports.getSellerProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select(
-      "mobile role shopName ownerName address lat lng"
+      "mobile role shopName ownerName address lat lng profilePicture"
     );
 
     if (!user || user.role !== "seller") {
@@ -45,7 +45,12 @@ exports.updateSellerProfile = async (req, res) => {
     user.ownerName = ownerName ?? user.ownerName;
     user.address = address ?? user.address;
     user.lat = lat ?? user.lat;
+    user.lat = lat ?? user.lat;
     user.lng = lng ?? user.lng;
+
+    if (req.file && req.file.path) {
+      user.profilePicture = req.file.path;
+    }
 
     await user.save();
 
@@ -86,7 +91,7 @@ exports.getPublicSellerProfile = async (req, res) => {
   try {
     const { id } = req.params;
     const seller = await User.findOne({ _id: id, role: "seller" }).select(
-      "shopName ownerName mobile address lat lng"
+      "shopName ownerName mobile address lat lng profilePicture"
     );
 
     if (!seller) {
@@ -119,7 +124,7 @@ exports.getAllSellers = async (req, res) => {
     }
 
     const sellers = await User.find(filter)
-      .select("shopName ownerName _id address")
+      .select("shopName ownerName _id address profilePicture")
       .limit(10); // Limit to popular/recent 10 for now
 
     res.json(sellers);

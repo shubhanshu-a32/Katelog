@@ -21,6 +21,10 @@ const userSchema = new mongoose.Schema(
       type: String,
       default: ""
     },
+    profilePicture: {
+      type: String,
+      default: ""
+    },
     // SELLER LOCATION
     address: {
       type: String,
