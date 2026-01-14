@@ -22,7 +22,7 @@ const listCategories = async (req, res) => {
     const subCategories = await SubCategory.find().lean();
 
     const categoryList = categories.map(cat => {
-      const subs = subCategories.filter(sub => sub.category.toString() === cat._id.toString());
+      const subs = subCategories.filter(sub => sub.category && sub.category.toString() === cat._id.toString());
       return {
         _id: cat._id,
         name: cat.title,

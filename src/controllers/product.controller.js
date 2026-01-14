@@ -239,7 +239,12 @@ const listProducts = async (req, res) => {
         const catDoc =
           (await Category.findOne({ slug: category })) ||
           (await Category.findOne({ title: category.toUpperCase() }));
-        if (catDoc) filter.category = catDoc._id;
+        if (catDoc) {
+          filter.category = catDoc._id;
+        } else {
+          // Category requested but not found -> return empty
+          return res.json({ data: [], total: 0, limit, page, pages: 0 });
+        }
       }
     }
 
@@ -250,7 +255,12 @@ const listProducts = async (req, res) => {
         const subDoc =
           (await SubCategory.findOne({ slug: subcategory })) ||
           (await SubCategory.findOne({ title: subcategory.toUpperCase() }));
-        if (subDoc) filter.subcategory = subDoc._id;
+        if (subDoc) {
+          filter.subcategory = subDoc._id;
+        } else {
+          // SubCategory requested but not found -> return empty
+          return res.json({ data: [], total: 0, limit, page, pages: 0 });
+        }
       }
     }
 
@@ -266,7 +276,10 @@ const listProducts = async (req, res) => {
     filter.status = { $ne: "DISABLED" };
 
     // Location-based filtering
-    if (req.query.pincode || req.query.area) {
+    const KATNI_PINCODE = 483501;
+    const isDefaultLocation = Number(req.query.pincode) === KATNI_PINCODE;
+
+    if (!isDefaultLocation && (req.query.pincode || req.query.area)) {
       const SellerProfile = require("../models/SellerProfile");
       const locationFilter = {};
 

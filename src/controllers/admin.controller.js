@@ -8,6 +8,10 @@ const SellerAnalytics = require("../models/SellerAnalytics");
 const PDFDocument = require("pdfkit");
 const xlsx = require("xlsx");
 
+const SellerProfile = require("../models/SellerProfile");
+const BuyerProfile = require("../models/BuyerProfile");
+const bcrypt = require("bcryptjs");
+
 const getStats = async (req, res) => {
   const totalOrders = await Order.countDocuments();
   const totalRevenue = await Order.aggregate([
@@ -132,27 +136,69 @@ const getUserById = async (req, res) => {
 const getSellerById = async (req, res) => {
   try {
     const { id } = req.params;
-    const user = await User.findById(id).select('-password profilePicture');
-    if (!user) return res.status(404).json({ message: "Seller not found" });
 
-    const profile = await SellerProfile.findOne({ userId: id });
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ message: "Invalid Seller ID" });
+    }
 
-    // For sellers, orders meant "Received Orders" (sold by them)
-    const orders = await Order.find({ sellerId: id })
-      .populate("buyer", "fullName mobile email")
-      .populate("items.product", "title price images")
-      .sort({ createdAt: -1 });
+    const userDoc = await User.findById(id).select('-password');
+    if (!userDoc) return res.status(404).json({ message: "Seller not found" });
 
-    res.json({ user, profile, orders });
+    // Use plain object for safer manipulation
+    const user = userDoc.toObject();
+
+    const profileDoc = await SellerProfile.findOne({ userId: id });
+    console.log(`[GetSeller] ID: ${id}, User Found: Yes, Profile Found: ${!!profileDoc}`);
+
+    // Merging User data into Profile for display robustness
+    let profileData = profileDoc ? profileDoc.toObject() : {};
+
+    // Helper to pick best value
+    const pickVal = (pVal, uVal) => (pVal && String(pVal).trim() !== "") ? pVal : uVal;
+
+    profileData.mobile = pickVal(profileData.mobile, user.mobile);
+    profileData.businessPhone = pickVal(profileData.businessPhone, user.mobile);
+    profileData.shopName = pickVal(profileData.shopName, user.shopName || user.ownerName);
+    profileData.address = pickVal(profileData.address, user.address);
+    profileData.ownerName = pickVal(profileData.ownerName, user.ownerName);
+    profileData.email = pickVal(profileData.email, user.email);
+
+    // Try to extract pincode from address if missing or zero
+    if (!profileData.pincode && profileData.address && typeof profileData.address === 'string') {
+      try {
+        const pinMatch = profileData.address.match(/\b\d{6}\b/);
+        if (pinMatch) profileData.pincode = Number(pinMatch[0]);
+      } catch (e) {
+        console.warn("Error extracting pincode from address:", e);
+      }
+    }
+
+    // Exclude Sensitive Bank Details
+    if (profileData.bankDetails) {
+      delete profileData.bankDetails;
+    }
+
+    // Fetch orders safely
+    let orders = [];
+    try {
+      orders = await Order.find({ sellerId: id })
+        .populate("buyer", "fullName mobile email")
+        .populate("items.product", "title price images")
+        .sort({ createdAt: -1 })
+        .lean();
+    } catch (orderErr) {
+      console.error("Error fetching seller orders:", orderErr);
+    }
+
+    console.log(`[GetSeller] Returning loaded profile for ${id}`);
+    res.json({ user, profile: profileData, orders });
   } catch (err) {
-    console.error(err);
+    console.error(`[GetSeller] CRITICAL ERROR for ID: ${req.params.id}`, err);
     res.status(500).json({ message: "Failed to fetch seller details" });
   }
 };
 
-const SellerProfile = require("../models/SellerProfile");
-const BuyerProfile = require("../models/BuyerProfile");
-const bcrypt = require("bcryptjs");
+
 
 const getAllSellers = async (req, res) => {
   try {
@@ -245,7 +291,25 @@ const getAllOrders = async (req, res) => {
       .populate("buyer", "fullName mobile email")
       .populate("items.product", "title price images")
       .populate("sellerId", "ownerName shopName profilePicture")
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Enrich with Seller Pincode
+    const sellerIds = [...new Set(orders.map(o => o.sellerId?._id).filter(id => id))];
+    const sellerProfiles = await SellerProfile.find({ userId: { $in: sellerIds } }).select("userId pincode");
+
+    // Map pincodes
+    const pincodeMap = {};
+    sellerProfiles.forEach(sp => {
+      pincodeMap[sp.userId.toString()] = sp.pincode;
+    });
+
+    // Attach to orders
+    orders.forEach(order => {
+      if (order.sellerId && order.sellerId._id) {
+        order.sellerId.pincode = pincodeMap[order.sellerId._id.toString()];
+      }
+    });
 
     res.json(orders);
   } catch (err) {
@@ -304,6 +368,7 @@ const deleteSeller = async (req, res) => {
     const { id } = req.params;
     await User.findByIdAndDelete(id);
     await SellerProfile.findOneAndDelete({ userId: id });
+    await Product.deleteMany({ sellerId: id });
     // TODO: Cascade delete products/orders if needed
     res.json({ message: "Seller deleted" });
   } catch (err) {
@@ -469,9 +534,15 @@ const getAllDeliveryPartners = async (req, res) => {
 
     // If Pincode is provided, we query DeliveryPartner model first
     if (pincode) {
-      const profiles = await DeliveryPartner.find({ pincode }).populate('userId');
-      // Transform to simplified structure or return as is. 
-      // Keeping it simple: Return array of { ...profile, userId: UserDoc }
+      // Convert to string and trim for consistent querying
+      const pinStr = String(pincode).trim();
+
+      // Try finding by exact string match or numeric value if applicable
+      // Using regex to handle potential whitespace differences if needed, or just $or
+      const profiles = await DeliveryPartner.find({
+        pincode: pinStr
+      }).populate('userId');
+
       return res.json(profiles);
     }
 
@@ -610,11 +681,41 @@ const assignOrderToPartner = async (req, res) => {
 
     if (!order) return res.status(404).json({ message: "Order not found" });
 
-    // --- PINCODE VALIDATION ---
-    // Fetch Seller Profile to get pincode
-    const sellerProfile = await SellerProfile.findOne({ userId: order.sellerId._id });
-    if (!sellerProfile || !sellerProfile.pincode) {
-      return res.status(400).json({ message: "Seller pincode not found. Cannot validate delivery area." });
+    // --- SELLER INFO RECOVERY & PINCODE VALIDATION ---
+    const sellerUser = order.sellerId; // Populated User doc
+    if (!sellerUser) {
+      return res.status(400).json({ message: "Seller user not found for this order." });
+    }
+
+    let sellerProfile = await SellerProfile.findOne({ userId: sellerUser._id });
+
+    // Fallback: If no profile, create a temporary object using User data
+    if (!sellerProfile) {
+      console.warn(`[AssignOrder] SellerProfile missing for ${sellerUser._id}, using User data.`);
+      sellerProfile = {
+        shopName: sellerUser.shopName || sellerUser.ownerName || "Unknown Shop",
+        businessPhone: sellerUser.mobile,
+        address: sellerUser.address,
+        // Try explicit fields first, though User schema has them as default null/""
+        pincode: null
+      };
+    }
+
+    // Attempt to extract pincode if missing
+    if (!sellerProfile.pincode) {
+      // Try to find pincode in address string (User address or Profile address)
+      const addrToSearch = sellerProfile.address || sellerUser.address || "";
+      const pinMatch = addrToSearch.match(/\b\d{6}\b/);
+      if (pinMatch) {
+        sellerProfile.pincode = Number(pinMatch[0]);
+        console.log(`[AssignOrder] Extracted pincode ${sellerProfile.pincode} from address.`);
+      }
+    }
+
+    if (!sellerProfile.pincode) {
+      // Final attempt: Check if sellerUser has a 'pincode' field (custom addition) or if we want to allow bypass?
+      // Strict Mode: Block.
+      return res.status(400).json({ message: "Seller pincode not found in Profile or Address. Cannot validate delivery area." });
     }
 
     // Fetch Delivery Partner Profile to get pincode
@@ -639,94 +740,76 @@ const assignOrderToPartner = async (req, res) => {
     order.orderStatus = "CONFIRMED"; // Auto-confirm on assignment? Or just assign. User didn't specify, but usually assignment implies process start.
     await order.save();
 
-    // 1. Notify Delivery Partner via WhatsApp
-    // Message: "Pickup from [Seller Address], Deliver to [Buyer Address]"
-
-    // Determine Seller Mobile with defensive check
+    // Determine Seller Contact Info
     let sellerMobileDisplay = "N/A";
     if (sellerProfile && sellerProfile.businessPhone) sellerMobileDisplay = sellerProfile.businessPhone;
     else if (sellerProfile && sellerProfile.whatsappNumber) sellerMobileDisplay = sellerProfile.whatsappNumber;
-    else if (order.sellerId && order.sellerId.mobile) sellerMobileDisplay = order.sellerId.mobile;
+    else if (sellerUser.mobile) sellerMobileDisplay = sellerUser.mobile;
 
-    // Determine Seller Address with defensive check
+    // Determine Seller Address
     let sellerAddressDisplay = "Address not set";
-    if (order.sellerId && order.sellerId.address) sellerAddressDisplay = order.sellerId.address;
-    else if (sellerProfile && sellerProfile.address) sellerAddressDisplay = sellerProfile.address;
+    if (sellerProfile && sellerProfile.address) sellerAddressDisplay = sellerProfile.address;
+    else if (sellerUser.address) sellerAddressDisplay = sellerUser.address;
 
-    // Construct Map Link
+
+    // --- GOOGLE MAP LINK GENERATION ---
     let mapLink = "";
-    if (order.sellerId && order.sellerId.lat && order.sellerId.lng) {
-      mapLink = ` https://www.google.com/maps?q=${order.sellerId.lat},${order.sellerId.lng}`;
-    } else if (order.sellerId.address || (sellerProfile && sellerProfile.address)) {
-      const addrForMap = order.sellerId.address || sellerProfile.address;
+    // Prioritize Lat/Lng from User (Seller) as it's most accurate
+    if (sellerUser.lat && sellerUser.lng) {
+      mapLink = ` https://www.google.com/maps?q=${sellerUser.lat},${sellerUser.lng}`;
+    } else {
+      // Fallback to address search
+      const addrForMap = sellerAddressDisplay !== "Address not set" ? sellerAddressDisplay : "";
       if (addrForMap) {
-        mapLink = ` https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addrForMap)}`;
+        const cleanAddr = addrForMap.replace(/\s+/g, '+');
+        mapLink = ` https://www.google.com/maps/search/?api=1&query=${cleanAddr}`;
       }
     }
 
-    // Format Buyer Address with safe checks and cleaning
+
+    // Format Buyer Address
     let buyerAddressStr = "Address not provided";
     if (order.address) {
-      // Helper to clean a string of "undefined" or "null"
-      const cleanStr = (s) => {
-        if (!s) return "";
-        return String(s)
-          .replace(/\bundefined\b/gi, "")
-          .replace(/\bnull\b/gi, "")
-          .trim();
-      };
+      const cleanStr = (s) => s ? String(s).replace(/\bundefined\b/gi, "").replace(/\bnull\b/gi, "").trim() : "";
 
-      // 1. Try to use explicit fields if available and look good
       const city = cleanStr(order.address.city);
-      const state = cleanStr(order.address.state);
       const pincode = cleanStr(order.address.pincode);
       let fullAddr = cleanStr(order.address.fullAddress);
 
-      // If fullAddress contains the garbage pattern "undefined, undefined", clean it specifically
-      // Fix likely patterns like "Street, undefined, undefined - Pincode"
+      // Clean garbage
       fullAddr = fullAddr
-        .replace(/,\s*,/g, ",") // Remove double commas
+        .replace(/,\s*,/g, ",")
         .replace(/,\s*-/g, " -") // Clean comma before hyphens
         .replace(/^,\s*/, "") // Remove leading comma
         .replace(/,\s*$/, ""); // Remove trailing comma
 
-      // Use the cleaned fullAddress if it has content
-      if (fullAddr && fullAddr.length > 5) { // Simple sanity check for length
+      if (fullAddr && fullAddr.length > 5) {
         buyerAddressStr = fullAddr;
       } else {
-        // Fallback: Construct from parts if fullAddress is garbage or empty
-        // Note: Schema might not have 'addressLine' distinct from 'fullAddress' depending on how it was saved.
-        // But we can try to use what we have.
         const parts = [fullAddr, city, pincode].filter(p => p);
         if (parts.length > 0) buyerAddressStr = parts.join(", ");
       }
 
-      // Final cleanup of the result just in case
-      buyerAddressStr = buyerAddressStr
-        .replace(/\bundefined\b/gi, "")
-        .replace(/,\s*,/g, ",")
-        .replace(/\s\s+/g, " ")
-        .trim();
+      buyerAddressStr = buyerAddressStr.replace(/\bundefined\b/gi, "").replace(/\s\s+/g, " ").trim();
     }
 
-    const pickupMsg = `Hello ${partner.fullName},\nNew Order Assigned!\n\nPICKUP FROM:\nShop: ${order.sellerId.shopName}\nMobile: ${sellerMobileDisplay}\nAddress: ${sellerAddressDisplay}${mapLink}\n\nDELIVER TO:\nBuyer: ${order.buyer.fullName}\nMobile: ${order.buyer.mobile}\nAddress: ${buyerAddressStr}\n\nPlease proceed immediately.`;
+    // Format Order Details
+    // Include full product list with quantity and price
+    const orderDetails = order.items
+      .map((item, idx) => {
+        const title = item.product ? item.product.title : "Unknown Product";
+        return `${idx + 1}. ${title} x ${item.quantity}`;
+      })
+      .join("\n");
+
+    const pickupMsg = `Hello ${partner.fullName},\nNew Order Assigned!\n\nPICKUP FROM:\nShop: ${sellerUser.shopName || sellerUser.ownerName}\nMobile: ${sellerMobileDisplay}\nAddress: ${sellerAddressDisplay}${mapLink}\n\nDELIVER TO:\nBuyer: ${order.buyer.fullName}\nMobile: ${order.buyer.mobile}\nAddress: ${buyerAddressStr}\n\nITEMS:\n${orderDetails}\n\nPlease proceed immediately.`;
 
     await sendWhatsappMessage(partner.mobile, pickupMsg);
 
     // 2. Notify Seller via WhatsApp
-    // Requested Format: "Delivery boy 'name' coming to your address for the order 'order-details' and it will deliver to 'buyer-name, address'"
+    const sellerMsg = `Delivery boy "${partner.fullName}" (Mobile: ${partner.mobile}) is coming to your address.\n\nORDER DETAILS:\n${orderDetails}\n\nDELIVER TO:\n${order.buyer.fullName}\n${buyerAddressStr}`;
 
-    // Format Order Details with safe checks
-    const orderDetails = order.items
-      .map(item => {
-        const title = item.product ? item.product.title : "Unknown Product";
-        return `${item.quantity} x ${title}`;
-      })
-      .join(", ");
-
-    const sellerMsg = `Delivery boy "${partner.fullName}" coming to your address for the order "${orderDetails}" and it will deliver to "${order.buyer.fullName}, ${buyerAddressStr}".`;
-
-    await sendWhatsappMessage(order.sellerId.mobile, sellerMsg);
+    await sendWhatsappMessage(sellerUser.mobile, sellerMsg);
 
     res.json({ message: "Order assigned and notifications sent", order });
   } catch (err) {
