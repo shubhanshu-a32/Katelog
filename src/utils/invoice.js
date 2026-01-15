@@ -109,7 +109,8 @@ const generateInvoice = (order, res) => {
 
     order.items.forEach((i) => {
         const title = i.product ? i.product.title : "Unknown Product";
-        const total = i.price * i.quantity;
+        const quantity = i.quantity || 0;
+        const total = i.price * quantity;
 
         // Check for page break
         if (y > 750) {
@@ -117,8 +118,11 @@ const generateInvoice = (order, res) => {
             y = 30;
         }
 
-        doc.text(title, 30, y, { width: 310, lineBreak: false, ellipsis: true });
-        doc.text(i.quantity.toString(), 350, y);
+        // Display Product Name and Quantity explicitly as requested
+        const itemText = `${title} (Qty: ${quantity})`;
+
+        doc.text(itemText, 30, y, { width: 310, lineBreak: false, ellipsis: true });
+        doc.text(quantity.toString(), 350, y);
         doc.text(`₹${i.price}`, 400, y);
         doc.text(`₹${total}`, 500, y);
 
@@ -131,13 +135,30 @@ const generateInvoice = (order, res) => {
     // --- Total ---
     y += 10;
 
+    // --- Total ---
+    y += 10;
+
+    // Calculate gross subtotal from items
+    const grossSubtotal = order.items.reduce((acc, item) => acc + (item.price * item.quantity), 0);
     const shipping = order.shippingCharge || 0;
-    const subtotal = order.totalAmount - shipping;
+    const discount = order.discountAmount || 0;
+    // We strive to match order.totalAmount.
+    // Mathematical check: correctTotal = grossSubtotal + shipping - discount
 
     doc.font('Helvetica').fontSize(10);
-    doc.text(`Subtotal: ₹${subtotal}`, 300, y, { align: 'right', width: 265 });
+
+    // 1. Gross Subtotal
+    doc.text(`Subtotal: ₹${grossSubtotal}`, 300, y, { align: 'right', width: 265 });
     y += 15;
 
+    // 2. Discount (if any)
+    if (discount > 0) {
+        const discountLabel = order.couponCode ? `Discount (${order.couponCode}):` : `Discount:`;
+        doc.fillColor('red').text(`${discountLabel} -₹${discount}`, 300, y, { align: 'right', width: 265 }).fillColor('black');
+        y += 15;
+    }
+
+    // 3. Shipping
     doc.text(`Shipping: ₹${shipping}`, 300, y, { align: 'right', width: 265 });
     y += 20;
 
