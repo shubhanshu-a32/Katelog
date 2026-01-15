@@ -10,7 +10,87 @@ const xlsx = require("xlsx");
 
 const SellerProfile = require("../models/SellerProfile");
 const BuyerProfile = require("../models/BuyerProfile");
+const Offer = require("../models/Offer");
 const bcrypt = require("bcryptjs");
+
+// Moved from offer.controller.js
+const applyOffer = async (req, res) => {
+  try {
+    const { code, amount, userId, products } = req.body;
+
+    if (!code || !amount || !userId) {
+      return res.status(400).json({ message: "Code, amount, and userId are required" });
+    }
+
+    const offer = await Offer.findOne({ code: code.toUpperCase(), isActive: true });
+    if (!offer) {
+      return res.status(404).json({ message: "Invalid or inactive offer code" });
+    }
+
+    const discountValue = offer.conditionValue;
+
+    // User Requirement: Strict Flat Deduction (Number only)
+    // "Admin can only give the number and not percentage"
+    let discount = discountValue;
+
+    // Minimum Cart Value: Coupon + 50 buffer
+    const minRequired = discount + 40;
+    if (amount < minRequired) {
+      return res.status(400).json({
+        message: `Cart value must be at least ₹${minRequired} to use this coupon.`
+      });
+    }
+
+    // Cap discount to amount (prevent negative)
+    discount = Math.min(discount, amount);
+
+    const finalAmount = Math.max(0, amount - discount);
+
+    // Context description
+    const context = products ? JSON.stringify(products) : "No product details provided";
+
+    // Update Offer with Usage
+    // Update Offer with Usage (Only for registered users)
+    if (userId && userId !== "guest") {
+      offer.usageHistory.push({
+        userId,
+        originalAmount: amount,
+        discountAmount: discount,
+        finalAmount,
+        productContext: context
+      });
+      await offer.save();
+    }
+
+    res.json({
+      success: true,
+      message: "Offer applied successfully",
+      discountAmount: discount,
+      originalAmount: amount,
+      finalAmount
+    });
+
+  } catch (err) {
+    console.error("applyOffer error:", err);
+    res.status(500).json({ message: "Failed to apply offer" });
+  }
+};
+
+const toggleOfferStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const offer = await Offer.findById(id);
+    if (!offer) return res.status(404).json({ message: "Offer not found" });
+
+    offer.isActive = !offer.isActive;
+    await offer.save();
+
+    res.json({ message: "Offer status updated", offer });
+  } catch (err) {
+    console.error("toggleOfferStatus error:", err);
+    res.status(500).json({ message: "Failed to update offer status" });
+  }
+};
 
 const getStats = async (req, res) => {
   const totalOrders = await Order.countDocuments();
@@ -649,6 +729,7 @@ const assignOrderToPartner = async (req, res) => {
     }
 
     console.log(`[AssignOrder] Order: ${id}, Partner: ${partnerId}`);
+    console.log("[AssignOrder] Executing Enriched Assignment Logic v2");
 
     // ALLOW UNASSIGNMENT: If partnerId is explicitly NULL, we unassign the partner.
     if (Object.keys(req.body).includes('partnerId') && req.body.partnerId === null) {
@@ -728,7 +809,10 @@ const assignOrderToPartner = async (req, res) => {
     const sellerPincode = String(sellerProfile.pincode).trim();
     const partnerPincode = String(partnerProfile.pincode).trim();
 
+    console.log(`[AssignOrder] Comparing Pincodes - Seller: '${sellerPincode}' vs Partner: '${partnerPincode}'`);
+
     if (sellerPincode !== partnerPincode) {
+      console.warn(`[AssignOrder] Mismatch Blocked: ${sellerPincode} !== ${partnerPincode}`);
       return res.status(400).json({
         message: `Pincode mismatch! Seller is in ${sellerPincode}, but Partner is in ${partnerPincode}.`
       });
@@ -737,7 +821,7 @@ const assignOrderToPartner = async (req, res) => {
 
     // Update Order
     order.deliveryPartner = partnerId;
-    order.orderStatus = "CONFIRMED"; // Auto-confirm on assignment? Or just assign. User didn't specify, but usually assignment implies process start.
+    order.orderStatus = "CONFIRMED";
     await order.save();
 
     // Determine Seller Contact Info
@@ -754,11 +838,9 @@ const assignOrderToPartner = async (req, res) => {
 
     // --- GOOGLE MAP LINK GENERATION ---
     let mapLink = "";
-    // Prioritize Lat/Lng from User (Seller) as it's most accurate
     if (sellerUser.lat && sellerUser.lng) {
       mapLink = ` https://www.google.com/maps?q=${sellerUser.lat},${sellerUser.lng}`;
     } else {
-      // Fallback to address search
       const addrForMap = sellerAddressDisplay !== "Address not set" ? sellerAddressDisplay : "";
       if (addrForMap) {
         const cleanAddr = addrForMap.replace(/\s+/g, '+');
@@ -771,47 +853,64 @@ const assignOrderToPartner = async (req, res) => {
     let buyerAddressStr = "Address not provided";
     if (order.address) {
       const cleanStr = (s) => s ? String(s).replace(/\bundefined\b/gi, "").replace(/\bnull\b/gi, "").trim() : "";
-
       const city = cleanStr(order.address.city);
       const pincode = cleanStr(order.address.pincode);
       let fullAddr = cleanStr(order.address.fullAddress);
-
-      // Clean garbage
-      fullAddr = fullAddr
-        .replace(/,\s*,/g, ",")
-        .replace(/,\s*-/g, " -") // Clean comma before hyphens
-        .replace(/^,\s*/, "") // Remove leading comma
-        .replace(/,\s*$/, ""); // Remove trailing comma
-
-      if (fullAddr && fullAddr.length > 5) {
-        buyerAddressStr = fullAddr;
-      } else {
+      fullAddr = fullAddr.replace(/,\s*,/g, ",").replace(/,\s*-/g, " -").replace(/^,\s*/, "").replace(/,\s*$/, "");
+      if (fullAddr && fullAddr.length > 5) buyerAddressStr = fullAddr;
+      else {
         const parts = [fullAddr, city, pincode].filter(p => p);
         if (parts.length > 0) buyerAddressStr = parts.join(", ");
       }
-
       buyerAddressStr = buyerAddressStr.replace(/\bundefined\b/gi, "").replace(/\s\s+/g, " ").trim();
     }
 
     // Format Order Details
-    // Include full product list with quantity and price
     const orderDetails = order.items
       .map((item, idx) => {
         const title = item.product ? item.product.title : "Unknown Product";
-        return `${idx + 1}. ${title} x ${item.quantity}`;
+        return `${idx + 1}. ${title} x ${item.quantity} (₹${item.price || 0})`;
       })
       .join("\n");
 
-    const pickupMsg = `Hello ${partner.fullName},\nNew Order Assigned!\n\nPICKUP FROM:\nShop: ${sellerUser.shopName || sellerUser.ownerName}\nMobile: ${sellerMobileDisplay}\nAddress: ${sellerAddressDisplay}${mapLink}\n\nDELIVER TO:\nBuyer: ${order.buyer.fullName}\nMobile: ${order.buyer.mobile}\nAddress: ${buyerAddressStr}\n\nITEMS:\n${orderDetails}\n\nPlease proceed immediately.`;
+    const extraDetails = `Total: ₹${order.totalAmount}\nPayment: ${order.paymentMode || 'COD'}\nOrder ID: ${order._id}`;
 
-    await sendWhatsappMessage(partner.mobile, pickupMsg);
+    const buyerName = order.buyer?.fullName || "Guest/Unknown";
+    const buyerMobile = order.buyer?.mobile || "N/A";
+
+    // Use best available number for Seller Notification
+    const sellerNotifyNumber = (sellerMobileDisplay && sellerMobileDisplay !== "N/A")
+      ? sellerMobileDisplay
+      : sellerUser.mobile;
+
+    const pickupMsg = `Hello ${partner.fullName},\nNew Order Assigned!\n\nORDER ID: ${order._id}\n\nPICKUP FROM:\nShop: ${sellerUser.shopName || sellerUser.ownerName}\nMobile: ${sellerMobileDisplay}\nAddress: ${sellerAddressDisplay}\nLocation: ${mapLink}\n\nDELIVER TO:\nBuyer: ${buyerName}\nMobile: ${buyerMobile}\nAddress: ${buyerAddressStr}\n\nITEMS:\n${orderDetails}\n\n${extraDetails}\n\nPlease proceed immediately.`;
 
     // 2. Notify Seller via WhatsApp
-    const sellerMsg = `Delivery boy "${partner.fullName}" (Mobile: ${partner.mobile}) is coming to your address.\n\nORDER DETAILS:\n${orderDetails}\n\nDELIVER TO:\n${order.buyer.fullName}\n${buyerAddressStr}`;
+    // User requested format: "Hello seller.name, delivery partner {delivery partner.name}, {deliverypartner.mobile} is assigned and coming to take the product: {product.details} to deliver to {buyer.name}, {products details}"
 
-    await sendWhatsappMessage(sellerUser.mobile, sellerMsg);
+    // Clean up order details for inline use if needed, or keep block regular.
+    // Let's use a nice block format but with the requested intro phrase.
+    // Updated format per user request
+    const sellerMsg = `Hello seller ${sellerUser.shopName || sellerUser.ownerName || "Seller"},\ndelivery partner is assigned ${partner.fullName}, ${partner.mobile} to deliver ${orderDetails} to ${buyerName}, ${buyerMobile}, ${buyerAddressStr}. So, please ready the above product to give it to delivery partner.\nThank You!!`;
 
-    res.json({ message: "Order assigned and notifications sent", order });
+    try {
+      console.log(`[AssignOrder] Sending to PARTNER (${partner.mobile}):\n${pickupMsg}`);
+      await sendWhatsappMessage(partner.mobile, pickupMsg);
+
+      console.log(`[AssignOrder] Sending to SELLER (${sellerNotifyNumber}):\n${sellerMsg}`);
+      await sendWhatsappMessage(sellerNotifyNumber, sellerMsg);
+    } catch (msgErr) {
+      console.error("[AssignOrder] Message sending failed (Non-fatal):", msgErr);
+    }
+
+    res.json({
+      message: "Order assigned and notifications sent",
+      order,
+      sellerMsg,
+      pickupMsg,
+      sellerMobile: sellerNotifyNumber,
+      partnerMobile: partner.mobile
+    });
   } catch (err) {
     console.error("Assign Order Error:", err);
     res.status(500).json({ message: "Failed to assign order" });
@@ -1191,6 +1290,66 @@ const updateAnalytics = async (req, res) => {
   }
 };
 
+const createOffer = async (req, res) => {
+  try {
+    const { code, provider, tagline, conditionType, conditionValue, active } = req.body;
+
+    if (!code || !tagline || conditionValue === undefined) {
+      return res.status(400).json({ message: "Code, Tagline and Condition Value are required" });
+    }
+
+    const existing = await Offer.findOne({ code: code.toUpperCase() });
+    if (existing) {
+      return res.status(400).json({ message: "Offer code already exists" });
+    }
+
+    const offer = await Offer.create({
+      provider: provider || "KETALOG OFFER",
+      code: code.toUpperCase(),
+      tagline,
+      conditionType: conditionType || "percentage",
+      conditionValue: Number(conditionValue),
+      isActive: active !== undefined ? active : true
+    });
+
+    res.status(201).json(offer);
+  } catch (err) {
+    console.error("createOffer error:", err);
+    res.status(500).json({ message: "Failed to create offer" });
+  }
+};
+
+const getAllOffers = async (req, res) => {
+  try {
+    const offers = await Offer.find().sort({ createdAt: -1 });
+    res.json(offers);
+  } catch (err) {
+    console.error("getAllOffers error:", err);
+    res.status(500).json({ message: "Failed to fetch offers" });
+  }
+};
+
+const getActiveOffers = async (req, res) => {
+  try {
+    const offers = await Offer.find({ isActive: true }).select("code conditionValue conditionType tagline");
+    res.json(offers);
+  } catch (err) {
+    console.error("getActiveOffers error:", err);
+    res.status(500).json({ message: "Failed to fetch active offers" });
+  }
+};
+
+const deleteOffer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    await Offer.findByIdAndDelete(id);
+    res.json({ message: "Offer deleted successfully" });
+  } catch (err) {
+    console.error("deleteOffer error:", err);
+    res.status(500).json({ message: "Failed to delete offer" });
+  }
+};
+
 module.exports = {
   getStats,
   getAllUsers,
@@ -1219,5 +1378,11 @@ module.exports = {
   deleteAnalytics,
   downloadAnalyticsExcel,
   downloadAnalyticsPDF,
-  updateAnalytics
+  updateAnalytics,
+  createOffer,
+  getAllOffers,
+  getActiveOffers,
+  deleteOffer,
+  applyOffer,
+  toggleOfferStatus
 };

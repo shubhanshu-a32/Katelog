@@ -6,7 +6,10 @@ const { getSellerProfile, updateSellerProfile, getPublicSellerProfile, getAllSel
 const upload = require("../middlewares/upload");
 
 router.get("/", authenticate, getSellerProfile);
-router.put("/", authenticate, upload.single("profilePicture"), updateSellerProfile);
+router.put("/", authenticate, upload.fields([
+    { name: 'profilePicture', maxCount: 1 },
+    { name: 'coverPhoto', maxCount: 1 }
+]), updateSellerProfile);
 router.get("/list", getAllSellers);
 router.get("/:id", getPublicSellerProfile);
 

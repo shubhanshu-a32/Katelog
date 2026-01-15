@@ -4,7 +4,7 @@ const SellerProfile = require("../models/SellerProfile");
 exports.getSellerProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id).select(
-      "mobile role shopName ownerName address lat lng profilePicture"
+      "mobile role shopName ownerName address lat lng profilePicture coverPhoto"
     );
 
     if (!user || user.role !== "seller") {
@@ -32,7 +32,10 @@ exports.getSellerProfile = async (req, res) => {
 
 exports.updateSellerProfile = async (req, res) => {
   try {
+    console.log("updateSellerProfile: START");
     const { shopName, ownerName, address, lat, lng, pincode, area, gstNumber, bankDetails } = req.body;
+    console.log("updateSellerProfile: Body:", req.body);
+    console.log("updateSellerProfile: Files:", req.files);
 
     const user = await User.findById(req.user._id);
 
@@ -45,14 +48,21 @@ exports.updateSellerProfile = async (req, res) => {
     user.ownerName = ownerName ?? user.ownerName;
     user.address = address ?? user.address;
     user.lat = lat ?? user.lat;
-    user.lat = lat ?? user.lat;
     user.lng = lng ?? user.lng;
 
-    if (req.file && req.file.path) {
-      user.profilePicture = req.file.path;
+    // Handle File Uploads (Fields)
+    if (req.files) {
+      if (req.files['profilePicture'] && req.files['profilePicture'][0]) {
+        user.profilePicture = req.files['profilePicture'][0].path;
+      }
+      if (req.files['coverPhoto'] && req.files['coverPhoto'][0]) {
+        user.coverPhoto = req.files['coverPhoto'][0].path;
+      }
     }
 
+    console.log("updateSellerProfile: Saving user...");
     await user.save();
+    console.log("updateSellerProfile: User saved.");
 
     // Sync with SellerProfile model (for filtering)
     // Upsert logic
@@ -91,7 +101,7 @@ exports.getPublicSellerProfile = async (req, res) => {
   try {
     const { id } = req.params;
     const seller = await User.findOne({ _id: id, role: "seller" }).select(
-      "shopName ownerName mobile address lat lng profilePicture"
+      "shopName ownerName mobile address lat lng profilePicture coverPhoto"
     );
 
     if (!seller) {
@@ -124,7 +134,7 @@ exports.getAllSellers = async (req, res) => {
     }
 
     const sellers = await User.find(filter)
-      .select("shopName ownerName _id address profilePicture")
+      .select("shopName ownerName _id address profilePicture coverPhoto")
       .limit(10); // Limit to popular/recent 10 for now
 
     res.json(sellers);

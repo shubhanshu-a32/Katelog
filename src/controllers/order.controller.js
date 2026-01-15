@@ -6,6 +6,10 @@ const { generateInvoice } = require('../utils/invoice');
 
 /* ---------------- SHIPPING LOGIC ---------------- */
 const calcShipping = (itemCount, total) => {
+  // Free Shipping (User Request - "Make the shipping logic comment out")
+  return 0;
+
+  /*
   // 1. Single product
   if (itemCount === 1) {
     if (total > 2000) return 0; // Rule 4
@@ -21,6 +25,7 @@ const calcShipping = (itemCount, total) => {
 
   // Fallback for multiple items <= 2000
   return 100;
+  */
 };
 
 /* ---------------- CREATE ORDER ---------------- */
@@ -39,6 +44,8 @@ const createOrder = async (req, res) => {
     // 1. Group items by Seller
     const sellerGroups = {};
 
+    console.log("CreateOrder Items:", items);
+
     for (const it of items) {
       const prodId = it.product || it.productId;
       const qty = it.quantity || it.qty;
@@ -46,12 +53,21 @@ const createOrder = async (req, res) => {
       const product = await Product.findById(prodId);
 
       if (!product) {
-        return res.status(400).json({ message: "Product not found" });
+        console.error("Product not found:", prodId);
+        return res.status(400).json({
+          message: "One or more items in your cart is no longer available.",
+          invalidProductId: prodId,
+          errorType: "PRODUCT_NOT_FOUND"
+        });
       }
 
       if (product.stock < qty) {
+        console.error("Insufficient stock:", product.title, product.stock, qty);
         return res.status(400).json({
           message: `Insufficient stock for ${product.title}`,
+          invalidProductId: prodId,
+          errorType: "INSUFFICIENT_STOCK",
+          availableStock: product.stock
         });
       }
 
@@ -82,12 +98,34 @@ const createOrder = async (req, res) => {
 
     const createdOrders = [];
 
+    // 1.5 Calculate Global Total for Proportional Discount
+    let globalTotal = 0;
+    for (const sellerId in sellerGroups) {
+      globalTotal += sellerGroups[sellerId].totalAmount;
+    }
+
     // 2. Create Order for each seller
+    const { couponCode, discount } = req.body;
+    const totalDiscountToApply = Number(discount) || 0;
+
     for (const sellerId in sellerGroups) {
       const group = sellerGroups[sellerId];
 
       const shippingCharge = calcShipping(group.items.length, group.totalAmount);
-      const finalTotal = group.totalAmount + shippingCharge;
+
+      // Proportional Discount Calculation
+      // If multiple orders, split discount based on value share
+      let orderDiscount = 0;
+      if (totalDiscountToApply > 0 && globalTotal > 0) {
+        const ratio = group.totalAmount / globalTotal;
+        orderDiscount = Math.floor(totalDiscountToApply * ratio);
+      }
+
+      // Ensure discount doesn't exceed total
+      const totalBeforeDiscount = group.totalAmount + shippingCharge;
+      orderDiscount = Math.min(orderDiscount, totalBeforeDiscount);
+
+      const finalTotal = totalBeforeDiscount - orderDiscount;
 
       const order = await Order.create({
         buyer,
@@ -95,6 +133,8 @@ const createOrder = async (req, res) => {
         items: group.items,
         totalAmount: finalTotal,
         shippingCharge,
+        couponCode: couponCode || null,
+        discountAmount: orderDiscount,
         paymentMode,
         paymentStatus: paymentMode === "COD" ? "PENDING" : "PAID",
         orderStatus: "PLACED",

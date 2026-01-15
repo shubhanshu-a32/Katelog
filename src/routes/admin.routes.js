@@ -47,4 +47,12 @@ router.get("/analytics/download/pdf", adminAuth, adminCtrl.downloadAnalyticsPDF)
 router.put("/analytics/:id", adminAuth, adminCtrl.updateAnalytics);
 router.delete("/analytics/:id", adminAuth, adminCtrl.deleteAnalytics);
 
+// OFFERS
+router.post("/offer", adminAuth, adminCtrl.createOffer);
+router.get("/offers", adminAuth, adminCtrl.getAllOffers); // Admin only
+router.get("/offers/active", adminCtrl.getActiveOffers); // Public/Buyer
+router.delete("/offer/:id", adminAuth, adminCtrl.deleteOffer);
+router.put("/offer/:id", adminAuth, adminCtrl.toggleOfferStatus);
+router.post("/offer/apply", adminCtrl.applyOffer); // Public/Buyer route
+
 module.exports = router;

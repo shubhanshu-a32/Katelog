@@ -1,3 +1,4 @@
+// Force Restart v6
 'use strict';
 
 const express = require('express');
@@ -142,6 +143,15 @@ if (buildDir) {
 } else {
   console.log('⚠️ Frontend build not found. Upload React build folder (client/dist or dist).');
 }
+
+// Global Error Handler
+app.use((err, req, res, next) => {
+  console.error("Global Error Handler:", err);
+  if (err instanceof multer.MulterError) {
+    return res.status(400).json({ message: `Upload error: ${err.message}` });
+  }
+  res.status(500).json({ message: err.message || "Internal Server Error" });
+});
 
 // ---- start ----
 async function start() {
