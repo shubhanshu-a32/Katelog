@@ -112,14 +112,17 @@ const generateInvoice = (order, res) => {
         const quantity = i.quantity || 0;
         const total = i.price * quantity;
 
-        // Check for page break
-        if (y > 750) {
-            doc.addPage();
-            y = 30;
+        // Sanitize title to remove non-ASCII characters (often causes garbage in PDFKit standard fonts)
+        // e.g. "Gobhi / गोभी" -> "Gobhi / "
+        let sanitizedTitle = title.replace(/[^\x00-\x7F]/g, "").trim();
+
+        // Remove trailing " /" or "/" if it was left behind
+        if (sanitizedTitle.endsWith("/")) {
+            sanitizedTitle = sanitizedTitle.slice(0, -1).trim();
         }
 
         // Display Product Name and Quantity explicitly as requested
-        const itemText = `${title} (Qty: ${quantity})`;
+        const itemText = `${sanitizedTitle} (Qty: ${quantity})`;
 
         doc.text(itemText, 30, y, { width: 310, lineBreak: false, ellipsis: true });
         doc.text(quantity.toString(), 350, y);
