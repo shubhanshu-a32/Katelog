@@ -1,25 +1,26 @@
 const mongoose = require("mongoose");
-const Order = require("../models/Order");
 const User = require("../models/User");
-const Product = require("../models/Product");
-const { sendWhatsappMessage } = require("../services/whatsapp.service");
-const DeliveryPartner = require("../models/DeliveryPartner");
-const SellerAnalytics = require("../models/SellerAnalytics");
-const PDFDocument = require("pdfkit");
-const xlsx = require("xlsx");
-
 const SellerProfile = require("../models/SellerProfile");
-const BuyerProfile = require("../models/BuyerProfile");
+const Order = require("../models/Order");
+const DeliveryPartner = require("../models/DeliveryPartner");
+const Category = require("../models/Category");
+const SellerAnalytics = require("../models/SellerAnalytics");
 const Offer = require("../models/Offer");
+const Product = require("../models/Product");
+const xlsx = require("xlsx");
+const { sendWhatsappMessage } = require("../services/whatsapp.service");
+const PDFDocument = require("pdfkit");
+const BuyerProfile = require("../models/BuyerProfile");
+const Variant = require("../models/Variant");
 const bcrypt = require("bcryptjs");
 
 // Moved from offer.controller.js
 const applyOffer = async (req, res) => {
   try {
-    const { code, amount, userId, products } = req.body;
+    const { code, amount, userId, products, categoryId } = req.body;
 
-    if (!code || !amount || !userId) {
-      return res.status(400).json({ message: "Code, amount, and userId are required" });
+    if (!code || !userId) {
+      return res.status(400).json({ message: "Code and userId are required" });
     }
 
     const offer = await Offer.findOne({ code: code.toUpperCase(), isActive: true });
@@ -27,34 +28,94 @@ const applyOffer = async (req, res) => {
       return res.status(404).json({ message: "Invalid or inactive offer code" });
     }
 
-    const discountValue = offer.conditionValue;
+    // Check expiry date
+    if (offer.expiryDate) {
+      const now = new Date();
+      const expiry = new Date(offer.expiryDate);
+      // Set expiry to end of the day (inclusive)
+      expiry.setHours(23, 59, 59, 999);
 
-    // User Requirement: Strict Flat Deduction (Number only)
-    // "Admin can only give the number and not percentage"
-    let discount = discountValue;
+      if (now > expiry) {
+        return res.status(400).json({ message: "This coupon has expired" });
+      }
+    }
 
-    // Minimum Cart Value: Coupon + 50 buffer
-    const minRequired = discount + 40;
-    if (amount < minRequired) {
+    // REMOVED: Usage limit check as per user request (Step 511)
+
+    // Calculate category-specific total if coupon has category restrictions
+    let applicableAmount = amount || 0;
+
+    if (offer.applicableCategories && offer.applicableCategories.length > 0) {
+      // Coupon has category restrictions - calculate total from matching products only
+      if (!products || products.length === 0) {
+        return res.status(400).json({
+          message: "This coupon requires product information"
+        });
+      }
+
+      // Fetch product details to get categories
+      const productIds = products.map(p => p.id);
+      const productDetails = await Product.find({ _id: { $in: productIds } }).select("category price");
+
+      // Calculate total only from products matching the coupon's categories
+      let categoryTotal = 0;
+      products.forEach(item => {
+        const productDetail = productDetails.find(p => p._id.toString() === item.id.toString());
+        if (productDetail) {
+          // Check if product's category matches any of the coupon's applicable categories
+          const categoryMatches = offer.applicableCategories.some(
+            catId => catId.toString() === productDetail.category.toString()
+          );
+          if (categoryMatches) {
+            categoryTotal += productDetail.price * item.qty;
+          }
+        }
+      });
+
+      if (categoryTotal === 0) {
+        // Fetch category names for better error message
+        const Category = require("../models/Category");
+        const allowedCategories = await Category.find({ _id: { $in: offer.applicableCategories } }).select("title");
+        const allowedNames = allowedCategories.map(c => c.title).join(", ");
+
+        return res.status(400).json({
+          message: `This coupon is only applicable to items in: ${allowedNames || "specific categories"}`
+        });
+      }
+
+      applicableAmount = categoryTotal;
+    }
+
+    // Check minimum cart amount (using category-specific total if applicable)
+    if (offer.minCartAmount && applicableAmount < offer.minCartAmount) {
       return res.status(400).json({
-        message: `Cart value must be at least ₹${minRequired} to use this coupon.`
+        message: `Minimum cart value of ₹${offer.minCartAmount} required for this coupon`
       });
     }
 
-    // Cap discount to amount (prevent negative)
-    discount = Math.min(discount, amount);
+    const discountValue = offer.conditionValue;
 
-    const finalAmount = Math.max(0, amount - discount);
+    // Validate: Discount cannot exceed applicable amount
+    if (discountValue > applicableAmount) {
+      return res.status(400).json({
+        message: `Cart value for applicable products (₹${applicableAmount}) is less than coupon discount (₹${discountValue})`
+      });
+    }
+
+    // Calculate final discount
+    let discount = Math.min(discountValue, applicableAmount);
+
+    // Calculate final amount
+    const finalAmount = Math.max(0, (amount || applicableAmount) - discount);
 
     // Context description
     const context = products ? JSON.stringify(products) : "No product details provided";
 
-    // Update Offer with Usage
     // Update Offer with Usage (Only for registered users)
     if (userId && userId !== "guest") {
       offer.usageHistory.push({
         userId,
-        originalAmount: amount,
+        originalAmount: amount || applicableAmount,
         discountAmount: discount,
         finalAmount,
         productContext: context
@@ -66,8 +127,9 @@ const applyOffer = async (req, res) => {
       success: true,
       message: "Offer applied successfully",
       discountAmount: discount,
-      originalAmount: amount,
-      finalAmount
+      originalAmount: amount || applicableAmount,
+      finalAmount,
+      applicableAmount // Send back the category-specific total for frontend reference
     });
 
   } catch (err) {
@@ -467,16 +529,16 @@ const deleteUser = async (req, res) => {
   }
 };
 
+
 // Reusing Category Logic or Implementing Simple One
-const Category = require("../models/Category");
 
 const addCategory = async (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, slug: bodySlug, subcategories } = req.body;
     if (!name) return res.status(400).json({ message: "Name is required" });
 
     // Check if category exists
-    const slug = name.toLowerCase().replace(/\s+/g, '-');
+    const slug = bodySlug || name.toLowerCase().replace(/\s+/g, '-');
     const existing = await Category.findOne({ slug });
     if (existing) return res.status(400).json({ message: "Category already exists" });
 
@@ -1292,10 +1354,41 @@ const updateAnalytics = async (req, res) => {
 
 const createOffer = async (req, res) => {
   try {
-    const { code, provider, tagline, conditionType, conditionValue, active } = req.body;
+    const {
+      code,
+      provider,
+      tagline,
+      conditionType,
+      conditionValue,
+      active,
+      minCartAmount,
+      expiryDate,
+      usageLimitPerBuyer,
+      applicableCategories
+    } = req.body;
 
     if (!code || !tagline || conditionValue === undefined) {
       return res.status(400).json({ message: "Code, Tagline and Condition Value are required" });
+    }
+
+    // Validate expiry date
+    if (expiryDate) {
+      const expiry = new Date(expiryDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      if (expiry < today) {
+        return res.status(400).json({
+          message: "Expiry date must be today or in the future"
+        });
+      }
+    }
+
+    // Validate minCartAmount
+    if (minCartAmount !== undefined && minCartAmount < 0) {
+      return res.status(400).json({
+        message: "Minimum cart amount cannot be negative"
+      });
     }
 
     const existing = await Offer.findOne({ code: code.toUpperCase() });
@@ -1307,8 +1400,12 @@ const createOffer = async (req, res) => {
       provider: provider || "KETALOG OFFER",
       code: code.toUpperCase(),
       tagline,
-      conditionType: conditionType || "percentage",
+      conditionType: conditionType || "flat",
       conditionValue: Number(conditionValue),
+      minCartAmount: minCartAmount || 0,
+      expiryDate: expiryDate || null,
+      usageLimitPerBuyer: usageLimitPerBuyer || null,
+      applicableCategories: applicableCategories || [],
       isActive: active !== undefined ? active : true
     });
 
@@ -1331,7 +1428,8 @@ const getAllOffers = async (req, res) => {
 
 const getActiveOffers = async (req, res) => {
   try {
-    const offers = await Offer.find({ isActive: true }).select("code conditionValue conditionType tagline");
+    const offers = await Offer.find({ isActive: true })
+      .select("code conditionValue conditionType tagline minCartAmount expiryDate applicableCategories usageHistory");
     res.json(offers);
   } catch (err) {
     console.error("getActiveOffers error:", err);
@@ -1347,6 +1445,124 @@ const deleteOffer = async (req, res) => {
   } catch (err) {
     console.error("deleteOffer error:", err);
     res.status(500).json({ message: "Failed to delete offer" });
+  }
+};
+
+const updateOffer = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      provider,
+      code,
+      tagline,
+      conditionType,
+      conditionValue,
+      minCartAmount,
+      expiryDate,
+      usageLimitPerBuyer,
+      applicableCategories,
+      isActive
+    } = req.body;
+
+    const offer = await Offer.findById(id);
+    if (!offer) {
+      return res.status(404).json({ message: "Offer not found" });
+    }
+
+    // Validate expiry date if provided
+    if (expiryDate !== undefined) {
+      const expiry = new Date(expiryDate);
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      if (expiry < today) {
+        return res.status(400).json({
+          message: "Expiry date must be today or in the future"
+        });
+      }
+    }
+
+    // Validate usage limit if provided
+    if (usageLimitPerBuyer !== undefined && usageLimitPerBuyer < 1) {
+      return res.status(400).json({
+        message: "Usage limit must be at least 1"
+      });
+    }
+
+    // Validate minCartAmount if provided
+    if (minCartAmount !== undefined && minCartAmount < 0) {
+      return res.status(400).json({
+        message: "Minimum cart amount cannot be negative"
+      });
+    }
+
+    // Check if code is being changed and if it already exists
+    if (code && code.toUpperCase() !== offer.code) {
+      const existing = await Offer.findOne({ code: code.toUpperCase() });
+      if (existing) {
+        return res.status(400).json({ message: "Offer code already exists" });
+      }
+    }
+
+    // Update fields
+    if (provider !== undefined) offer.provider = provider;
+    if (code !== undefined) offer.code = code.toUpperCase();
+    if (tagline !== undefined) offer.tagline = tagline;
+    if (conditionType !== undefined) offer.conditionType = conditionType;
+    if (conditionValue !== undefined) offer.conditionValue = conditionValue;
+    if (minCartAmount !== undefined) offer.minCartAmount = minCartAmount;
+    if (expiryDate !== undefined) offer.expiryDate = expiryDate;
+    if (usageLimitPerBuyer !== undefined) offer.usageLimitPerBuyer = usageLimitPerBuyer;
+    if (applicableCategories !== undefined) offer.applicableCategories = applicableCategories;
+    if (isActive !== undefined) offer.isActive = isActive;
+
+    await offer.save();
+
+    res.json({ message: "Offer updated successfully", offer });
+  } catch (err) {
+    console.error("updateOffer error:", err);
+    res.status(500).json({ message: "Failed to update offer" });
+  }
+};
+
+
+/* ---------------- VARIANT MANAGEMENT (ADMIN) ---------------- */
+const getAllVariants = async (req, res) => {
+  try {
+    // Return all variants populated with product info
+    const variants = await Variant.find().populate('product');
+    res.json(variants);
+  } catch (err) {
+    console.error("admin getAllVariants error:", err);
+    res.status(500).json({ message: "Failed to fetch all variants" });
+  }
+};
+
+const updateVariant = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const variant = await Variant.findByIdAndUpdate(id, updates, { new: true });
+    if (!variant) return res.status(404).json({ message: "Variant not found" });
+
+    res.json(variant);
+  } catch (err) {
+    console.error("admin updateVariant error:", err);
+    res.status(500).json({ message: "Failed to update variant" });
+  }
+};
+
+const deleteVariant = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const variant = await Variant.findByIdAndDelete(id);
+    if (!variant) return res.status(404).json({ message: "Variant not found" });
+
+    res.json({ message: "Variant deleted successfully" });
+  } catch (err) {
+    console.error("admin deleteVariant error:", err);
+    res.status(500).json({ message: "Failed to delete variant" });
   }
 };
 
@@ -1380,9 +1596,13 @@ module.exports = {
   downloadAnalyticsPDF,
   updateAnalytics,
   createOffer,
+  updateOffer,
   getAllOffers,
   getActiveOffers,
   deleteOffer,
   applyOffer,
-  toggleOfferStatus
+  toggleOfferStatus,
+  getAllVariants,
+  updateVariant,
+  deleteVariant
 };

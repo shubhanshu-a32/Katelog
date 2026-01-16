@@ -18,13 +18,31 @@ const offerSchema = new mongoose.Schema({
     },
     conditionType: {
         type: String, // e.g., "percentage", "flat"
-        default: "percentage"
+        default: "flat"
     },
     conditionValue: {
         type: Number,
         required: true,
         min: 0
     },
+    minCartAmount: {
+        type: Number,
+        default: 0,
+        min: 0
+    },
+    expiryDate: {
+        type: Date,
+        default: null
+    },
+    expiryDate: {
+        type: Date,
+        default: null
+    },
+    // usageLimitPerBuyer removed
+    applicableCategories: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Category"
+    }],
     isActive: {
         type: Boolean,
         default: true

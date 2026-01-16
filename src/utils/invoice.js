@@ -159,6 +159,14 @@ const generateInvoice = (order, res) => {
         const discountLabel = order.couponCode ? `Discount (${order.couponCode}):` : `Discount:`;
         doc.fillColor('red').text(`${discountLabel} -₹${discount}`, 300, y, { align: 'right', width: 265 }).fillColor('black');
         y += 15;
+
+        // Show discount remark if available
+        if (order.discountRemark) {
+            doc.fontSize(8).fillColor('#666666')
+                .text(`(${order.discountRemark})`, 300, y, { align: 'right', width: 265 })
+                .fillColor('black').fontSize(10);
+            y += 15;
+        }
     }
 
     // 3. Shipping

@@ -78,6 +78,7 @@ try {
 try {
   const categoryRoutes = require("./routes/category.routes");
   app.use("/api/categories", categoryRoutes);
+  app.use("/api/variants", require("./routes/variant.routes")); // New Variant Routes
   console.log("✅ Mounted: /api/categories");
 } catch (e) { console.log("⚠️ category.routes not loaded:", e.message); }
 

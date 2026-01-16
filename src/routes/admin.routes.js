@@ -52,7 +52,12 @@ router.post("/offer", adminAuth, adminCtrl.createOffer);
 router.get("/offers", adminAuth, adminCtrl.getAllOffers); // Admin only
 router.get("/offers/active", adminCtrl.getActiveOffers); // Public/Buyer
 router.delete("/offer/:id", adminAuth, adminCtrl.deleteOffer);
-router.put("/offer/:id", adminAuth, adminCtrl.toggleOfferStatus);
+router.put("/offer/:id", adminAuth, adminCtrl.updateOffer);
 router.post("/offer/apply", adminCtrl.applyOffer); // Public/Buyer route
+
+// VARIANTS
+router.get("/variants", adminAuth, adminCtrl.getAllVariants);
+router.put("/variants/:id", adminAuth, adminCtrl.updateVariant);
+router.delete("/variants/:id", adminAuth, adminCtrl.deleteVariant);
 
 module.exports = router;

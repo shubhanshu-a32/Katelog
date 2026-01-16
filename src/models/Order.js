@@ -39,6 +39,7 @@ const orderSchema = new mongoose.Schema(
     },
     couponCode: { type: String, default: null },
     discountAmount: { type: Number, default: 0 },
+    discountRemark: { type: String, default: null },
     address: {
       fullAddress: String,
       mobile: String,

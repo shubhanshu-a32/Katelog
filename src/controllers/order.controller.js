@@ -3,6 +3,7 @@ const Product = require("../models/Product");
 const SellerAnalytics = require("../models/SellerAnalytics");
 const { paginate } = require("../utils/pagination");
 const { generateInvoice } = require('../utils/invoice');
+const Offer = require("../models/Offer");
 
 /* ---------------- SHIPPING LOGIC ---------------- */
 const calcShipping = (itemCount, total) => {
@@ -90,6 +91,7 @@ const createOrder = async (req, res) => {
         quantity: qty,
         price: product.price,
         commission: commissionPercent,
+        category: product.category // Store category for discount logic
       });
 
       sellerGroups[sellerIdStr].totalAmount += amount;
@@ -98,14 +100,42 @@ const createOrder = async (req, res) => {
 
     const createdOrders = [];
 
-    // 1.5 Calculate Global Total for Proportional Discount
-    let globalTotal = 0;
-    for (const sellerId in sellerGroups) {
-      globalTotal += sellerGroups[sellerId].totalAmount;
+    // 1.5 Calculate Global Total for Proportional Discount (Eligible Amount Only)
+    // Fetch coupon to check categories
+    const { couponCode, discount } = req.body;
+    let applicableCategories = [];
+    let offer = null;
+
+    if (couponCode) {
+      offer = await Offer.findOne({ code: couponCode.toUpperCase(), isActive: true });
+      if (offer) {
+        // Usage limit check removed as per user request
+
+        applicableCategories = offer.applicableCategories || [];
+      }
     }
 
-    // 2. Create Order for each seller
-    const { couponCode, discount } = req.body;
+    let globalEligibleAmount = 0;
+    const sellerEligibleTotals = {};
+
+    // Calculate eligible totals per seller
+    for (const sellerId in sellerGroups) {
+      let groupEligibleTotal = 0;
+      sellerGroups[sellerId].items.forEach(item => {
+        if (!applicableCategories.length) {
+          // No restrictions = all items eligible
+          groupEligibleTotal += (item.price * item.quantity);
+        } else {
+          // Check if item category matches coupon categories
+          if (item.category && applicableCategories.some(cat => cat.toString() === item.category.toString())) {
+            groupEligibleTotal += (item.price * item.quantity);
+          }
+        }
+      });
+      sellerEligibleTotals[sellerId] = groupEligibleTotal;
+      globalEligibleAmount += groupEligibleTotal;
+    }
+
     const totalDiscountToApply = Number(discount) || 0;
 
     for (const sellerId in sellerGroups) {
@@ -113,12 +143,14 @@ const createOrder = async (req, res) => {
 
       const shippingCharge = calcShipping(group.items.length, group.totalAmount);
 
-      // Proportional Discount Calculation
-      // If multiple orders, split discount based on value share
+      // Proportional Discount Calculation STRICTLY based on Eligible Amount
       let orderDiscount = 0;
-      if (totalDiscountToApply > 0 && globalTotal > 0) {
-        const ratio = group.totalAmount / globalTotal;
-        orderDiscount = Math.floor(totalDiscountToApply * ratio);
+      if (totalDiscountToApply > 0 && globalEligibleAmount > 0) {
+        const eligibleAmt = sellerEligibleTotals[sellerId] || 0;
+        if (eligibleAmt > 0) {
+          const ratio = eligibleAmt / globalEligibleAmount;
+          orderDiscount = Math.floor(totalDiscountToApply * ratio);
+        }
       }
 
       // Ensure discount doesn't exceed total
@@ -127,14 +159,20 @@ const createOrder = async (req, res) => {
 
       const finalTotal = totalBeforeDiscount - orderDiscount;
 
+      let discountRemark = null;
+      if (orderDiscount > 0 && offer) {
+        discountRemark = `Coupon ${offer.code} applied.`;
+      }
+
       const order = await Order.create({
         buyer,
         sellerId: group.sellerId,
         items: group.items,
         totalAmount: finalTotal,
         shippingCharge,
-        couponCode: couponCode || null,
+        couponCode: orderDiscount > 0 ? (couponCode || null) : null, // Only save coupon if discount applied
         discountAmount: orderDiscount,
+        discountRemark,
         paymentMode,
         paymentStatus: paymentMode === "COD" ? "PENDING" : "PAID",
         orderStatus: "PLACED",

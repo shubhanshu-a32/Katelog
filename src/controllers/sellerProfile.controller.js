@@ -115,27 +115,68 @@ exports.getPublicSellerProfile = async (req, res) => {
   }
 };
 
+const Product = require("../models/Product");
+const Category = require("../models/Category");
+const mongoose = require("mongoose");
+
 exports.getAllSellers = async (req, res) => {
   try {
-    const { pincode } = req.query;
+    const { pincode, category } = req.query;
     let filter = { role: "seller" };
+    let sellerIdsFromCategory = null;
 
-    if (pincode) {
-      // Find seller profiles with this pincode
-      const profiles = await SellerProfile.find({ pincode: Number(pincode) }).select("userId");
-      const userIds = profiles.map(p => p.userId);
-
-      // If no sellers found in this pincode, return empty
-      if (userIds.length === 0) {
-        return res.json([]);
+    // 1. Filter by Category (if provided)
+    if (category) {
+      let categoryId;
+      if (mongoose.Types.ObjectId.isValid(category)) {
+        categoryId = category;
+      } else {
+        const catDoc = await Category.findOne({ slug: category }) ||
+          await Category.findOne({ title: category.toUpperCase() });
+        if (catDoc) categoryId = catDoc._id;
       }
 
-      filter._id = { $in: userIds };
+      if (categoryId) {
+        // Find all products in this category and get distinct sellerIds
+        const products = await Product.find({ category: categoryId }).select("sellerId");
+        sellerIdsFromCategory = products.map(p => p.sellerId.toString()); // Convert to string for comparison
+
+        // If no products in this category, no sellers to show
+        if (products.length === 0) {
+          return res.json([]);
+        }
+      } else {
+        // Category provided but not found -> return empty
+        return res.json([]);
+      }
+    }
+
+    // 2. Filter by Pincode (if provided)
+    let sellerIdsFromLocation = null;
+    if (pincode) {
+      const profiles = await SellerProfile.find({ pincode: Number(pincode) }).select("userId");
+      sellerIdsFromLocation = profiles.map(p => p.userId.toString());
+
+      if (sellerIdsFromLocation.length === 0) {
+        return res.json([]);
+      }
+    }
+
+    // 3. Combine Filters (Intersection)
+    if (sellerIdsFromCategory !== null && sellerIdsFromLocation !== null) {
+      // Intersection of both lists
+      const intersection = sellerIdsFromCategory.filter(id => sellerIdsFromLocation.includes(id));
+      if (intersection.length === 0) return res.json([]);
+      filter._id = { $in: intersection };
+    } else if (sellerIdsFromCategory !== null) {
+      filter._id = { $in: sellerIdsFromCategory };
+    } else if (sellerIdsFromLocation !== null) {
+      filter._id = { $in: sellerIdsFromLocation };
     }
 
     const sellers = await User.find(filter)
       .select("shopName ownerName _id address profilePicture coverPhoto")
-      .limit(10); // Limit to popular/recent 10 for now
+      .limit(10);
 
     res.json(sellers);
   } catch (err) {
