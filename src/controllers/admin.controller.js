@@ -315,10 +315,10 @@ const getSellerById = async (req, res) => {
       }
     }
 
-    // Exclude Sensitive Bank Details
-    if (profileData.bankDetails) {
-      delete profileData.bankDetails;
-    }
+    // Bank Details are now required for Admin view
+    // if (profileData.bankDetails) {
+    //   delete profileData.bankDetails;
+    // }
 
     // Fetch orders safely
     let orders = [];
@@ -368,14 +368,13 @@ const getAllSellers = async (req, res) => {
 
           userId: {
             _id: "$_id",
-            name: "$name",
-            email: "$email",
-            mobile: "$mobile",
-            role: "$role",
+            name: "$ownerName",
             mobile: "$mobile",
             role: "$role",
             createdAt: "$createdAt",
-            profilePicture: "$profilePicture"
+            profilePicture: "$profilePicture",
+            bankDetails: "$profile.bankDetails",
+            upiId: "$profile.upiId"
           },
           shopName: { $ifNull: ["$profile.shopName", "Unnamed Shop"] },
           createdAt: "$createdAt",
@@ -1566,6 +1565,67 @@ const deleteVariant = async (req, res) => {
   }
 };
 
+const updateSeller = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      name, shopName, mobile, email,
+      bankDetails, upiId,
+      pincode, address, businessPhone, gstNumber,
+      whatsappNumber
+    } = req.body;
+
+    // 1. Find User and SellerProfile
+    const user = await User.findById(id);
+    if (!user || user.role !== 'seller') {
+      return res.status(404).json({ message: "Seller not found" });
+    }
+
+    let profile = await SellerProfile.findOne({ userId: id });
+    if (!profile) {
+      // Create if missing (should exist, but for safety)
+      profile = new SellerProfile({ userId: id, shopName: shopName || user.shopName || "New Shop", upiId: upiId || "pending" });
+    }
+
+    // 2. Update User Fields
+    if (name) user.ownerName = name;
+    if (shopName) user.shopName = shopName;
+    if (mobile && mobile !== user.mobile) {
+      const existing = await User.findOne({ mobile });
+      if (existing) return res.status(400).json({ message: "Mobile number already exists" });
+      user.mobile = mobile;
+    }
+    if (address) user.address = address;
+    // Email is not in schema but if added later... skipping for now as per schema check
+
+    await user.save();
+
+    // 3. Update Profile Fields
+    if (shopName) profile.shopName = shopName;
+    if (businessPhone) profile.businessPhone = businessPhone;
+    else if (mobile) profile.businessPhone = mobile; // Fallback sync
+
+    if (address) profile.address = address;
+    if (pincode) profile.pincode = pincode;
+    if (gstNumber) profile.gstNumber = gstNumber;
+    if (whatsappNumber) profile.whatsappNumber = whatsappNumber;
+
+    // Critical Fields
+    if (upiId) profile.upiId = upiId;
+    if (bankDetails) {
+      // Merge or overwrite bank details
+      profile.bankDetails = { ...profile.bankDetails, ...bankDetails };
+    }
+
+    await profile.save();
+
+    res.json({ message: "Seller updated successfully", user, profile });
+  } catch (err) {
+    console.error("updateSeller error:", err);
+    res.status(500).json({ message: "Failed to update seller" });
+  }
+};
+
 module.exports = {
   getStats,
   getAllUsers,
@@ -1576,6 +1636,7 @@ module.exports = {
   getAllSellers,
   getSellerById,
   getSellerOrders,
+  updateSeller,
   deleteSeller,
   getAllOrders,
   assignOrderToPartner,

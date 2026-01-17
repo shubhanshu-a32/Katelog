@@ -17,6 +17,7 @@ router.delete("/users/:id", adminAuth, adminCtrl.deleteUser);
 router.get("/sellers", adminAuth, adminCtrl.getAllSellers);
 router.get("/sellers/:id", adminAuth, adminCtrl.getSellerById);
 router.get("/sellers/:id/orders", adminAuth, adminCtrl.getSellerOrders);
+router.put("/sellers/:id", adminAuth, adminCtrl.updateSeller);
 router.delete("/sellers/:id", adminAuth, adminCtrl.deleteSeller);
 
 // ORDERS
