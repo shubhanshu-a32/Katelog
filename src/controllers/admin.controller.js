@@ -320,6 +320,12 @@ const getSellerById = async (req, res) => {
     //   delete profileData.bankDetails;
     // }
 
+    // Ensure UPI ID and GST Number are passed through explicitly
+    profileData.upiId = (profileDoc && profileDoc.upiId) ? profileDoc.upiId : "";
+    profileData.gstNumber = (profileDoc && profileDoc.gstNumber) ? profileDoc.gstNumber : "";
+    profileData.whatsappNumber = (profileDoc && profileDoc.whatsappNumber) ? profileDoc.whatsappNumber : "";
+    profileData.bankDetails = (profileDoc && profileDoc.bankDetails) ? profileDoc.bankDetails : {};
+
     // Fetch orders safely
     let orders = [];
     try {

@@ -20,7 +20,9 @@ exports.getSellerProfile = async (req, res) => {
       pincode: sellerProfile?.pincode,
       area: sellerProfile?.area,
       gstNumber: sellerProfile?.gstNumber,
-      bankDetails: sellerProfile?.bankDetails
+      bankDetails: sellerProfile?.bankDetails,
+      upiId: sellerProfile?.upiId,
+      whatsappNumber: sellerProfile?.whatsappNumber
     };
 
     res.json(responseData);
@@ -33,7 +35,7 @@ exports.getSellerProfile = async (req, res) => {
 exports.updateSellerProfile = async (req, res) => {
   try {
     console.log("updateSellerProfile: START");
-    const { shopName, ownerName, address, lat, lng, pincode, area, gstNumber, bankDetails } = req.body;
+    const { shopName, ownerName, address, lat, lng, pincode, area, gstNumber, bankDetails, upiId, whatsappNumber } = req.body;
     console.log("updateSellerProfile: Body:", req.body);
     console.log("updateSellerProfile: Files:", req.files);
 
@@ -76,7 +78,9 @@ exports.updateSellerProfile = async (req, res) => {
         pincode: pincode ? Number(pincode) : undefined, // Ensure number
         area: area,
         gstNumber: gstNumber,
-        bankDetails: bankDetails
+        bankDetails: bankDetails,
+        upiId: upiId,
+        whatsappNumber: whatsappNumber
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
@@ -89,7 +93,9 @@ exports.updateSellerProfile = async (req, res) => {
       pincode: updatedProfile?.pincode,
       area: updatedProfile?.area,
       gstNumber: updatedProfile?.gstNumber,
-      bankDetails: updatedProfile?.bankDetails
+      bankDetails: updatedProfile?.bankDetails,
+      upiId: updatedProfile?.upiId,
+      whatsappNumber: updatedProfile?.whatsappNumber
     });
   } catch (err) {
     console.error("updateSellerProfile error:", err);

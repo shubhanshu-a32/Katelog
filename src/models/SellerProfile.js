@@ -16,7 +16,7 @@ const sellerProfileSchema = new mongoose.Schema({
         bankName: { type: String },
         ifscCode: { type: String }
     },
-    upiId: { type: String, required: true },
+    upiId: { type: String },
     createdAt: { type: Date, default: Date.now }
 });
 
